@@ -725,6 +725,7 @@ mark {
 }
 
 .draw-layout {
+  position: relative;
   display: grid;
   grid-template-columns: 3.2rem minmax(0, 1fr);
   gap: 0.75rem;
@@ -758,6 +759,27 @@ canvas {
     linear-gradient(90deg, rgba(0,0,0,0.035) 1px, transparent 1px) 0 0 / 18px 18px,
     #f7f4ed;
   touch-action: none;
+}
+
+.inactive-cover {
+  position: absolute;
+  inset: 0 0 0 3.95rem;
+  display: grid;
+  place-items: center;
+  border: 2px solid #1b1b20;
+  color: var(--muted);
+  background:
+    linear-gradient(rgba(0,0,0,0.04) 1px, transparent 1px) 0 0 / 18px 18px,
+    linear-gradient(90deg, rgba(0,0,0,0.035) 1px, transparent 1px) 0 0 / 18px 18px,
+    #f7f4ed;
+  text-transform: uppercase;
+  pointer-events: none;
+}
+
+.inactive-cover span {
+  color: #777;
+  font-family: var(--font-pixel);
+  font-size: 0.78rem;
 }
 
 .mini-drawing {

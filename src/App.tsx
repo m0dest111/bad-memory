@@ -247,7 +247,7 @@ function DrawingCanvas({
         <span>DRAW</span>
         <time>{isActive ? timerLabel : "--:--"}</time>
       </header>
-      <p className="prompt">PROMPT: <mark>{prompt}</mark></p>
+      <p className="prompt">{isActive ? <>PROMPT: <mark>{prompt}</mark></> : "PROMPT: waiting for the draw step"}</p>
       <div className="draw-layout">
         <div className="tools" aria-label="Drawing tools">
           <button className={tool === "pencil" ? "active" : ""} onClick={() => setTool("pencil")} aria-label="Pencil">✎</button>
@@ -265,6 +265,11 @@ function DrawingCanvas({
           onPointerLeave={end}
           aria-label="Drawing canvas"
         />
+        {!isActive && (
+          <div className="inactive-cover">
+            <span>WAITING</span>
+          </div>
+        )}
       </div>
       <footer className="panel-actions">
         <button className="secondary" onClick={clear}>CLEAR</button>
@@ -556,7 +561,7 @@ function App() {
               <time>{phase === "guess" ? timerLabel : "--:--"}</time>
             </header>
             <p className="prompt">WHAT IS THIS?</p>
-            <SubmittedDrawing src={drawingUrl} large />
+            {phase === "guess" ? <SubmittedDrawing src={drawingUrl} large /> : <div className="submitted-drawing submitted-drawing--large empty-drawing"><span>waiting for a drawing</span></div>}
             <textarea
               value={guess}
               maxLength={120}
