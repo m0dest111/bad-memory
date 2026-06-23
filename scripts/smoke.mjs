@@ -108,10 +108,15 @@ try {
   const archive = await archiveResponse.json();
   assert(archive.memories.some((memory) => memory.slug === reveal.slug), "archive should include the completed chain");
 
+  host.emit("room:create");
+  const secondLobby = await waitFor(host, "room:update", (room) => room.phase === "lobby" && room.code !== lobby.code);
+  assert(secondLobby.prompt !== lobby.prompt, "new rooms should not reuse prompts from saved chains");
+
   console.log(JSON.stringify({
     ok: true,
     code: reveal.code,
     prompt: reveal.prompt,
+    nextPrompt: secondLobby.prompt,
     memoryLoss: reveal.memoryLoss,
     submissions: reveal.submissions.length,
     savedSlug: saved.memory.slug,

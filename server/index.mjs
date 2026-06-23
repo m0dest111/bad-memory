@@ -48,6 +48,32 @@ const promptBank = [
   "a squirrel pitching venture capitalists",
 ];
 
+const promptSubjects = [
+  "a haunted vending machine",
+  "a jealous moon",
+  "a knight with stage fright",
+  "a cereal mascot",
+  "a nervous volcano",
+  "a retired superhero",
+  "a tiny dinosaur",
+  "a cursed birthday cake",
+  "a wizard intern",
+  "a sentient suitcase",
+];
+
+const promptActions = [
+  "arguing with customer support",
+  "hosting a garage sale",
+  "trying speed dating",
+  "getting stuck in an elevator",
+  "auditioning for a cooking show",
+  "teaching a yoga class",
+  "failing a driving test",
+  "running a city council meeting",
+  "escaping a team-building exercise",
+  "buying suspicious shoes",
+];
+
 const roomWords = ["GARBAGE", "TAXFISH", "WIZARD", "MAYHEM", "CRYPTID", "PRINTER", "BOUNCE", "DMVBUG", "VAMPIRE", "CAGE"];
 const MAX_CHAIN_STEPS = 8;
 const TURN_DURATION_MS = 60_000;
@@ -65,6 +91,7 @@ const avatarPool = [
 
 const rooms = new Map();
 const completedMemories = new Map();
+const reservedPrompts = new Set();
 
 function fromDbMemory(row) {
   return {
@@ -125,20 +152,20 @@ function persistMemories() {
   }
 }
 
-async function listMemories() {
+async function listMemories(limit = 20) {
   if (memoryPool) {
     const result = await memoryPool.query(`
       SELECT slug, prompt, memory_loss, created_at, completed_at, submissions
       FROM memories
       ORDER BY completed_at DESC
-      LIMIT 20
-    `);
+      LIMIT $1
+    `, [limit]);
     return result.rows.map(fromDbMemory);
   }
 
   return [...completedMemories.values()]
     .sort((a, b) => String(b.completedAt).localeCompare(String(a.completedAt)))
-    .slice(0, 20);
+    .slice(0, limit);
 }
 
 async function getMemory(slug) {
@@ -162,8 +189,47 @@ function makeRoomCode() {
   return Math.random().toString(36).slice(2, 8).toUpperCase();
 }
 
-function randomPrompt() {
-  return promptBank[Math.floor(Math.random() * promptBank.length)];
+function normalizePrompt(prompt) {
+  return String(prompt ?? "").trim().toLowerCase();
+}
+
+async function usedPrompts() {
+  const used = new Set([...rooms.values()].map((room) => normalizePrompt(room.prompt)));
+  for (const prompt of reservedPrompts) used.add(prompt);
+  if (memoryPool) {
+    const result = await memoryPool.query("SELECT prompt FROM memories");
+    for (const row of result.rows) used.add(normalizePrompt(row.prompt));
+  } else {
+    for (const memory of completedMemories.values()) used.add(normalizePrompt(memory.prompt));
+  }
+  return used;
+}
+
+async function randomPrompt() {
+  const used = await usedPrompts();
+  const available = promptBank.filter((prompt) => !used.has(normalizePrompt(prompt)));
+  if (available.length > 0) {
+    const prompt = available[Math.floor(Math.random() * available.length)];
+    reservedPrompts.add(normalizePrompt(prompt));
+    return prompt;
+  }
+
+  for (const subject of promptSubjects) {
+    for (const action of promptActions) {
+      const prompt = `${subject} ${action}`;
+      if (!used.has(normalizePrompt(prompt))) {
+        reservedPrompts.add(normalizePrompt(prompt));
+        return prompt;
+      }
+    }
+  }
+
+  let prompt = "";
+  do {
+    prompt = `${promptSubjects[Math.floor(Math.random() * promptSubjects.length)]} ${promptActions[Math.floor(Math.random() * promptActions.length)]} case ${makeSlug()}`;
+  } while (used.has(normalizePrompt(prompt)));
+  reservedPrompts.add(normalizePrompt(prompt));
+  return prompt;
 }
 
 function makeSlug() {
@@ -312,12 +378,13 @@ if (existsSync(distPath)) {
 }
 
 io.on("connection", (socket) => {
-  socket.on("room:create", () => {
+  socket.on("room:create", async () => {
     const code = makeRoomCode();
+    const prompt = await randomPrompt();
     const room = {
       code,
       phase: "lobby",
-      prompt: randomPrompt(),
+      prompt,
       slug: makeSlug(),
       memoryLoss: null,
       createdAt: new Date().toISOString(),
@@ -329,6 +396,7 @@ io.on("connection", (socket) => {
     };
 
     rooms.set(code, room);
+    reservedPrompts.delete(normalizePrompt(prompt));
     socket.join(code);
     emitRoom(io, room);
   });
