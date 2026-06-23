@@ -56,22 +56,46 @@ try {
   host.emit("game:start", { code: lobby.code });
   const drawingRound = await waitFor(host, "room:update", (room) => room.phase === "draw");
   assert(drawingRound.submissions.length === 0, "new draw round should start with no submissions");
+  assert(drawingRound.phaseEndsAt, "draw round should expose a countdown end time");
 
-  host.emit("submission:drawing", {
-    code: lobby.code,
-    imageUrl: "data:image/png;base64,ZmFrZS1kcmF3aW5n",
-  });
-  const guessRound = await waitFor(host, "room:update", (room) => room.phase === "guess");
-  assert(guessRound.submissions.some((submission) => submission.type === "drawing"), "drawing submission was not stored");
+  let latestRoom = drawingRound;
+  const chainInputs = [
+    { type: "drawing", content: "data:image/png;base64,ZHJhd2luZy0x" },
+    { type: "guess", content: "a nervous wizard doing government paperwork" },
+    { type: "drawing", content: "data:image/png;base64,ZHJhd2luZy0y" },
+    { type: "guess", content: "a stressed wizard at a desk" },
+    { type: "drawing", content: "data:image/png;base64,ZHJhd2luZy0z" },
+    { type: "guess", content: "a magician filing forms" },
+    { type: "drawing", content: "data:image/png;base64,ZHJhd2luZy00" },
+  ];
 
-  guest.emit("submission:guess", {
-    code: lobby.code,
-    guess: "a nervous wizard doing government paperwork",
-  });
-  const reveal = await waitFor(host, "room:update", (room) => room.phase === "reveal");
+  for (const [index, input] of chainInputs.entries()) {
+    if (input.type === "drawing") {
+      host.emit("submission:drawing", {
+        code: lobby.code,
+        imageUrl: input.content,
+      });
+    } else {
+      guest.emit("submission:guess", {
+        code: lobby.code,
+        guess: input.content,
+      });
+    }
+
+    const expectedPhase = index === chainInputs.length - 1 ? "reveal" : input.type === "drawing" ? "guess" : "draw";
+    latestRoom = await waitFor(host, "room:update", (room) => room.submissions.length === index + 1 && room.phase === expectedPhase);
+    assert(latestRoom.submissions.length === index + 1, `step ${index + 2} should be stored`);
+    if (expectedPhase === "draw" || expectedPhase === "guess") {
+      assert(latestRoom.phaseEndsAt, `${expectedPhase} round should expose a countdown end time`);
+    }
+  }
+
+  const reveal = latestRoom;
   assert(reveal.memoryLoss !== null, "memory loss should be calculated");
   assert(reveal.slug.length === 5, "share slug should be generated");
-  assert(reveal.submissions.some((submission) => submission.type === "guess"), "guess submission was not stored");
+  assert(reveal.submissions.length === 7, "full eight-step chain should include seven submissions after the prompt");
+  assert(reveal.submissions.filter((submission) => submission.type === "drawing").length === 4, "chain should include four drawings");
+  assert(reveal.submissions.filter((submission) => submission.type === "guess").length === 3, "chain should include three guesses");
 
   console.log(JSON.stringify({
     ok: true,

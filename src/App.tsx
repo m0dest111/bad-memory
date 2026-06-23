@@ -37,28 +37,23 @@ type RoomState = {
   slug: string;
   memoryLoss: number | null;
   createdAt: string;
+  phaseStartedAt?: string;
+  phaseEndsAt: string | null;
   players: Player[];
   submissions: Submission[];
 };
 
-const promptBank = [
-  "a wizard getting audited by the IRS",
-  "Bigfoot at airport security",
-  "Nicolas Cage working at Best Buy",
-  "Batman assembling IKEA furniture",
-  "a shark attending a wedding",
-  "a dragon applying for a mortgage",
-  "a vampire filing taxes",
-  "a pirate explaining cryptocurrency",
-  "a robot having a midlife crisis",
-  "a billionaire trapped in a bounce house",
-  "a haunted printer performance review",
-  "a penguin doing layoffs",
-];
+function latestSubmission(submissions: Submission[], type: Submission["type"]) {
+  for (let index = submissions.length - 1; index >= 0; index -= 1) {
+    if (submissions[index].type === type) return submissions[index];
+  }
+  return undefined;
+}
 
-function dailyPrompt() {
-  const day = new Date().getDate();
-  return promptBank[day % promptBank.length];
+function formatTimer(milliseconds: number | null) {
+  if (milliseconds === null) return "--:--";
+  const seconds = Math.max(0, Math.ceil(milliseconds / 1000));
+  return `${String(Math.floor(seconds / 60)).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`;
 }
 
 function PixelAvatar({ avatar, color }: { avatar: string; color: string }) {
@@ -141,10 +136,14 @@ function SubmittedDrawing({ src, large = false }: { src?: string; large?: boolea
 function DrawingCanvas({
   isActive,
   prompt,
+  roundNumber,
+  timerLabel,
   onSubmit,
 }: {
   isActive: boolean;
   prompt: string;
+  roundNumber: number;
+  timerLabel: string;
   onSubmit: (imageUrl: string) => void;
 }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -165,7 +164,7 @@ function DrawingCanvas({
     ctx.lineJoin = "round";
     setHistory([ctx.getImageData(0, 0, canvas.width, canvas.height)]);
     setSubmitted(false);
-  }, [prompt]);
+  }, [prompt, roundNumber]);
 
   function position(event: React.PointerEvent<HTMLCanvasElement>) {
     const canvas = canvasRef.current!;
@@ -230,9 +229,9 @@ function DrawingCanvas({
   return (
     <section className={isActive ? "panel game-panel active-round" : "panel game-panel dimmed-round"}>
       <header className="panel-title">
-        <span>ROUND 1 / 8</span>
+        <span>STEP {roundNumber} / 8</span>
         <span>DRAW</span>
-        <time>00:42</time>
+        <time>{isActive ? timerLabel : "--:--"}</time>
       </header>
       <p className="prompt">PROMPT: <mark>{prompt}</mark></p>
       <div className="draw-layout">
@@ -280,6 +279,8 @@ function App() {
   const [notice, setNotice] = useState("connecting to the room server...");
   const [copied, setCopied] = useState<"room" | "link" | null>(null);
   const [roomCodeInput, setRoomCodeInput] = useState("");
+  const [now, setNow] = useState(Date.now());
+  const [showHelp, setShowHelp] = useState(true);
 
   useEffect(() => {
     const socketUrl = import.meta.env.VITE_SOCKET_URL ?? (import.meta.env.DEV ? "http://127.0.0.1:3001" : undefined);
@@ -294,19 +295,22 @@ function App() {
 
     nextSocket.on("disconnect", () => {
       setServerOnline(false);
-      setNotice(import.meta.env.DEV ? "room server disconnected. run npm run dev:server." : "live room server disconnected. check VITE_SOCKET_URL.");
+      setNotice(import.meta.env.DEV ? "room server disconnected. run npm run dev:server." : "live room server disconnected. refresh or check service logs.");
     });
 
     nextSocket.on("connect_error", () => {
       setServerOnline(false);
-      setNotice(import.meta.env.DEV ? "waiting for room server. run npm run dev:server." : "waiting for live room server. set VITE_SOCKET_URL in Netlify.");
+      setNotice(import.meta.env.DEV ? "waiting for room server. run npm run dev:server." : "waiting for live room server. check the deploy.");
     });
 
     nextSocket.on("room:update", (nextRoom: RoomState) => {
       setRoom(nextRoom);
       setRoomCodeInput(nextRoom.code);
-      if (nextRoom.phase === "lobby") setNotice(`room ${nextRoom.code} ready. host can start.`);
-      if (nextRoom.phase === "draw") setNotice("round 1 started. draw before memory starts leaking.");
+      if (nextRoom.phase === "lobby") setNotice(`room ${nextRoom.code} created. host can start.`);
+      if (nextRoom.phase === "draw") {
+        setGuess("");
+        setNotice(`step ${nextRoom.submissions.length + 2} / 8. draw what the last person guessed.`);
+      }
       if (nextRoom.phase === "guess") setNotice("drawing submitted. guess what survived the handoff.");
       if (nextRoom.phase === "reveal") setNotice("chain complete. the collapse is ready to share.");
     });
@@ -322,18 +326,29 @@ function App() {
     };
   }, []);
 
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 500);
+    return () => window.clearInterval(timer);
+  }, []);
+
   const phase = room?.phase ?? "idle";
   const roomCreated = Boolean(room);
   const gameStarted = phase === "draw" || phase === "guess" || phase === "reveal";
+  const isHost = Boolean(room?.players.some((player) => player.id === socket?.id && player.role === "HOST"));
   const prompt = room?.prompt ?? "create a room to receive a prompt";
-  const drawingSubmission = room?.submissions.find((submission) => submission.type === "drawing");
-  const guessSubmission = room?.submissions.find((submission) => submission.type === "guess");
+  const submissions = room?.submissions ?? [];
+  const drawingSubmission = latestSubmission(submissions, "drawing");
+  const guessSubmission = latestSubmission(submissions, "guess");
   const drawingUrl = drawingSubmission?.content;
-  const finalGuess = guessSubmission?.content ?? guess;
+  const currentDrawPrompt = guessSubmission?.content ?? prompt;
+  const finalGuess = guessSubmission?.content ?? "";
+  const currentStep = Math.min(submissions.length + 2, 8);
   const memoryLoss = room?.memoryLoss ?? null;
-  const shareUrl = `badmemory.app/m/${room?.slug ?? "-----"}`;
-  const drawingCount = room?.submissions.filter((submission) => submission.type === "drawing").length ?? 0;
-  const guessCount = room?.submissions.filter((submission) => submission.type === "guess").length ?? 0;
+  const timerMs = room?.phaseEndsAt && (phase === "draw" || phase === "guess") ? new Date(room.phaseEndsAt).getTime() - now : null;
+  const timerLabel = formatTimer(timerMs);
+  const shareUrl = "public share links not built yet";
+  const drawingCount = submissions.filter((submission) => submission.type === "drawing").length;
+  const guessCount = submissions.filter((submission) => submission.type === "guess").length;
   const lobbySlots: Player[] = Array.from({ length: 12 }, (_, index) => {
     const player = room?.players[index];
     return player ?? {
@@ -346,10 +361,23 @@ function App() {
   });
   const chain: ChainStep[] = [
     { label: "1. PROMPT", type: "prompt", text: prompt },
-    { label: "2. DRAWING", type: "drawing", imageUrl: drawingUrl },
-    { label: "3. GUESS", type: "guess", text: finalGuess || "waiting for guess" },
-    { label: "4. FINAL", type: "final", imageUrl: drawingUrl },
+    ...submissions.map((submission, index): ChainStep => ({
+      label: `${index + 2}. ${phase === "reveal" && index === submissions.length - 1 ? "FINAL" : submission.type === "drawing" ? "DRAWING" : "GUESS"}`,
+      type: submission.type,
+      text: submission.type === "guess" ? submission.content : undefined,
+      imageUrl: submission.type === "drawing" ? submission.content : undefined,
+    })),
   ];
+
+  while (chain.length < 8) {
+    const nextIndex = chain.length + 1;
+    const isDrawing = nextIndex % 2 === 0;
+    chain.push({
+      label: `${nextIndex}. ${isDrawing ? "DRAWING" : "GUESS"}`,
+      type: isDrawing ? "drawing" : "guess",
+      text: isDrawing ? undefined : "waiting for guess",
+    });
+  }
 
   function createRoom() {
     if (!socket || !serverOnline) {
@@ -416,6 +444,7 @@ function App() {
           <span>MEMORY</span>
         </div>
         <p className="tagline">The drawing game about what happens when an idea has to survive other people.</p>
+        <button className="help-trigger" onClick={() => setShowHelp(true)}>HOW TO PLAY</button>
         <div className="pixel-relics" aria-hidden="true">
           <span className="relic relic--cursor" />
           <span className="relic relic--skull" />
@@ -433,23 +462,6 @@ function App() {
         />
         <button className="secondary" disabled={!serverOnline} onClick={joinRoom}>⌕ JOIN ROOM</button>
         <p className={serverOnline ? "prototype-status" : "prototype-status prototype-status--offline"} role="status">{notice}</p>
-        <section className="panel daily">
-          <header><span>★ DAILY DISASTER</span><time>PUBLIC</time></header>
-          <div className="daily-art">
-            <PixelAvatar avatar="bigfoot" color="#8c5534" />
-            <div className="daily-gate">
-              <span />
-              <span />
-              <span />
-            </div>
-            <div className="daily-guard">
-              <span />
-            </div>
-            <div className="security-gate">LIVE</div>
-          </div>
-          <strong>{dailyPrompt()}</strong>
-          <p>Public daily challenge. Room play uses the lobby prompt.</p>
-        </section>
       </aside>
 
       <section className="main-grid">
@@ -465,7 +477,7 @@ function App() {
               <div className={player.empty ? "player player--empty" : "player"} key={`${player.name}-${index}`}>
                 <PixelAvatar avatar={player.avatar} color={player.color} />
                 <span>{player.name}</span>
-                <b>{player.empty ? "EMPTY" : roomCreated ? (player.role ? `(${player.role})` : "READY") : "EMPTY"}</b>
+                <b>{player.empty ? "EMPTY" : roomCreated ? (player.role ? `(${player.role})` : "CONNECTED") : "EMPTY"}</b>
               </div>
             ))}
           </div>
@@ -475,19 +487,19 @@ function App() {
               {phase === "lobby" && "waiting for host to start the game..."}
               {gameStarted && "game in progress"}
             </p>
-            <button className="hot" disabled={phase !== "lobby"} onClick={startGame}>
+            <button className="hot" disabled={phase !== "lobby" || !isHost} onClick={startGame}>
               {gameStarted ? "GAME STARTED" : "START GAME"}
             </button>
           </div>
         </section>
 
         <div className="round-grid">
-          <DrawingCanvas isActive={phase === "draw"} prompt={prompt} onSubmit={submitDrawing} />
+          <DrawingCanvas isActive={phase === "draw"} prompt={currentDrawPrompt} roundNumber={currentStep} timerLabel={timerLabel} onSubmit={submitDrawing} />
           <section className={phase === "guess" ? "panel game-panel active-round" : "panel game-panel dimmed-round"}>
             <header className="panel-title">
-              <span>ROUND 2 / 8</span>
+              <span>STEP {currentStep} / 8</span>
               <span>GUESS</span>
-              <time>00:37</time>
+              <time>{phase === "guess" ? timerLabel : "--:--"}</time>
             </header>
             <p className="prompt">WHAT IS THIS?</p>
             <SubmittedDrawing src={drawingUrl} large />
@@ -525,7 +537,7 @@ function App() {
 
         <section className="bottom-grid">
           <section className={phase === "reveal" ? "panel share-card" : "panel share-card locked-card"}>
-            <h2>SHARE THIS DISASTER</h2>
+            <h2>RESULT SNAPSHOT</h2>
             <div className="ticket">
               <div>
                 <small>STARTED AS:</small>
@@ -534,13 +546,13 @@ function App() {
               <b>→</b>
               <div>
                 <small>ENDED AS:</small>
-                <p>{finalGuess || "waiting for final guess"}</p>
+                <p>{phase === "reveal" ? finalGuess || "final drawing" : "waiting for chain to finish"}</p>
               </div>
               <strong>{phase === "reveal" && memoryLoss !== null ? `${memoryLoss}%` : "--"}</strong>
             </div>
             <footer>
-              <code>{phase === "reveal" ? shareUrl : "complete a chain to mint a share link"}</code>
-              <button disabled={phase !== "reveal"} onClick={() => copyText("link", shareUrl)}>{copied === "link" ? "COPIED" : "COPY LINK"}</button>
+              <code>{phase === "reveal" ? shareUrl : "complete a chain to unlock result summary"}</code>
+              <button disabled>SHARE SOON</button>
             </footer>
           </section>
 
@@ -586,6 +598,23 @@ function App() {
           <strong>☻</strong>
         </footer>
       </section>
+
+      {showHelp && (
+        <div className="help-modal" role="dialog" aria-modal="true" aria-labelledby="help-title">
+          <div className="help-card">
+            <button className="help-close" onClick={() => setShowHelp(false)} aria-label="Close instructions">×</button>
+            <h1 id="help-title">HOW BAD MEMORY WORKS</h1>
+            <ol>
+              <li>Create a room, then share the room code.</li>
+              <li>One player draws the prompt before the timer runs out.</li>
+              <li>The next player guesses what the drawing is.</li>
+              <li>The game keeps alternating draw and guess until the reveal.</li>
+            </ol>
+            <p>Play in two browser windows or send the room code to someone else. For the cleanest test, join everyone before pressing Start Game.</p>
+            <button className="hot" onClick={() => setShowHelp(false)}>START TESTING</button>
+          </div>
+        </div>
+      )}
     </main>
   );
 }

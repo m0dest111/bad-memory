@@ -39,6 +39,8 @@ const promptBank = [
 ];
 
 const roomWords = ["GARBAGE", "TAXFISH", "WIZARD", "MAYHEM", "CRYPTID", "PRINTER", "BOUNCE", "DMVBUG", "VAMPIRE", "CAGE"];
+const MAX_CHAIN_STEPS = 8;
+const TURN_DURATION_MS = 60_000;
 
 const avatarPool = [
   { avatar: "wizard", color: "#4ea1ff" },
@@ -89,6 +91,12 @@ function makePlayer(socketId, index, role) {
   };
 }
 
+function setPhase(room, phase) {
+  room.phase = phase;
+  room.phaseStartedAt = new Date().toISOString();
+  room.phaseEndsAt = phase === "draw" || phase === "guess" ? new Date(Date.now() + TURN_DURATION_MS).toISOString() : null;
+}
+
 function publicRoom(room) {
   return {
     code: room.code,
@@ -97,6 +105,8 @@ function publicRoom(room) {
     slug: room.slug,
     memoryLoss: room.memoryLoss,
     createdAt: room.createdAt,
+    phaseStartedAt: room.phaseStartedAt,
+    phaseEndsAt: room.phaseEndsAt,
     players: room.players,
     submissions: room.submissions,
   };
@@ -104,6 +114,14 @@ function publicRoom(room) {
 
 function emitRoom(io, room) {
   io.to(room.code).emit("room:update", publicRoom(room));
+}
+
+function latestSubmission(room, type) {
+  return room.submissions.findLast((submission) => submission.type === type);
+}
+
+function latestGuessText(room) {
+  return latestSubmission(room, "guess")?.content ?? room.prompt;
 }
 
 const app = express();
@@ -136,6 +154,8 @@ io.on("connection", (socket) => {
       slug: makeSlug(),
       memoryLoss: null,
       createdAt: new Date().toISOString(),
+      phaseStartedAt: new Date().toISOString(),
+      phaseEndsAt: null,
       hostId: socket.id,
       players: [makePlayer(socket.id, 0, "HOST")],
       submissions: [],
@@ -155,6 +175,16 @@ io.on("connection", (socket) => {
       return;
     }
 
+    if (room.phase !== "lobby") {
+      socket.emit("room:error", `room ${normalized} is already in progress`);
+      return;
+    }
+
+    if (room.players.length >= 12 && !room.players.some((player) => player.id === socket.id)) {
+      socket.emit("room:error", `room ${normalized} is full`);
+      return;
+    }
+
     socket.join(room.code);
     if (!room.players.some((player) => player.id === socket.id)) {
       const nextIndex = room.players.length;
@@ -166,7 +196,11 @@ io.on("connection", (socket) => {
   socket.on("game:start", ({ code }) => {
     const room = rooms.get(String(code ?? "").toUpperCase());
     if (!room) return;
-    room.phase = "draw";
+    if (room.hostId !== socket.id) {
+      socket.emit("room:error", "only the host can start this room");
+      return;
+    }
+    setPhase(room, "draw");
     room.submissions = [];
     room.memoryLoss = null;
     emitRoom(io, room);
@@ -175,7 +209,6 @@ io.on("connection", (socket) => {
   socket.on("submission:drawing", ({ code, imageUrl }) => {
     const room = rooms.get(String(code ?? "").toUpperCase());
     if (!room || room.phase !== "draw" || typeof imageUrl !== "string") return;
-    room.submissions = room.submissions.filter((submission) => submission.type !== "drawing");
     room.submissions.push({
       id: `${Date.now()}-drawing`,
       type: "drawing",
@@ -183,7 +216,12 @@ io.on("connection", (socket) => {
       playerId: socket.id,
       createdAt: new Date().toISOString(),
     });
-    room.phase = "guess";
+    if (room.submissions.length >= MAX_CHAIN_STEPS - 1) {
+      room.memoryLoss = estimateMemoryLoss(room.prompt, latestGuessText(room));
+      setPhase(room, "reveal");
+    } else {
+      setPhase(room, "guess");
+    }
     emitRoom(io, room);
   });
 
@@ -191,7 +229,6 @@ io.on("connection", (socket) => {
     const room = rooms.get(String(code ?? "").toUpperCase());
     const text = String(guess ?? "").trim().slice(0, 120);
     if (!room || room.phase !== "guess" || !text) return;
-    room.submissions = room.submissions.filter((submission) => submission.type !== "guess");
     room.submissions.push({
       id: `${Date.now()}-guess`,
       type: "guess",
@@ -199,8 +236,12 @@ io.on("connection", (socket) => {
       playerId: socket.id,
       createdAt: new Date().toISOString(),
     });
-    room.memoryLoss = estimateMemoryLoss(room.prompt, text);
-    room.phase = "reveal";
+    if (room.submissions.length >= MAX_CHAIN_STEPS - 1) {
+      room.memoryLoss = estimateMemoryLoss(room.prompt, text);
+      setPhase(room, "reveal");
+    } else {
+      setPhase(room, "draw");
+    }
     emitRoom(io, room);
   });
 
