@@ -1156,6 +1156,17 @@ h2 {
   font-size: 0.72rem;
 }
 
+.gallery article a {
+  color: var(--green);
+  font-family: var(--font-pixel);
+  font-size: 0.62rem;
+  text-decoration: none;
+}
+
+.gallery article a:hover {
+  color: var(--yellow);
+}
+
 .site-footer {
   justify-content: space-between;
   padding: 0.3rem 1rem 0.9rem;

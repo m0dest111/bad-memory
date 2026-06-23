@@ -54,6 +54,23 @@ Optional:
 NODE_VERSION=20
 ```
 
+## Saved Chains Database
+
+To keep completed games shareable after deploys/restarts, add a Render Postgres database:
+
+1. In Render, create a new Postgres database.
+2. Copy its internal database URL.
+3. Open the Bad Memory web service.
+4. Add this environment variable:
+
+```text
+DATABASE_URL=YOUR_RENDER_POSTGRES_INTERNAL_DATABASE_URL
+```
+
+The app creates the `memories` table automatically.
+
+If `DATABASE_URL` is missing, completed chains are saved to a local JSON fallback. That is fine for local development, but it is not reliable for production.
+
 ## After Deploy
 
 Render will give you a URL like:
@@ -63,6 +80,12 @@ https://bad-memory.onrender.com
 ```
 
 Open that URL in two different browser windows or send it to a friend. One person clicks "Create Room" and the other joins with the room code.
+
+When a chain reaches the reveal, the app saves it and enables a share URL like:
+
+```text
+https://bad-memory.onrender.com/m/12345
+```
 
 ## Later
 

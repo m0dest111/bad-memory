@@ -1,12 +1,15 @@
 import express from "express";
 import { createServer } from "node:http";
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import pg from "pg";
 import { Server } from "socket.io";
 
+const { Pool } = pg;
 const PORT = Number(process.env.PORT ?? 3001);
 const HOST = process.env.HOST ?? "0.0.0.0";
+const DATABASE_URL = process.env.DATABASE_URL;
 const clientOrigins = process.env.CLIENT_ORIGIN
   ? process.env.CLIENT_ORIGIN.split(",").map((origin) => origin.trim()).filter(Boolean)
   : [
@@ -19,6 +22,13 @@ const clientOrigins = process.env.CLIENT_ORIGIN
     ];
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const distPath = path.join(__dirname, "..", "dist");
+const memoryStorePath = process.env.MEMORY_STORE_PATH ?? path.join(__dirname, "..", "data", "memories.json");
+let memoryPool = DATABASE_URL
+  ? new Pool({
+      connectionString: DATABASE_URL,
+      ssl: process.env.PGSSLMODE === "disable" || DATABASE_URL.includes("localhost") ? false : { rejectUnauthorized: false },
+    })
+  : null;
 
 const promptBank = [
   "a wizard getting audited by the IRS",
@@ -54,6 +64,94 @@ const avatarPool = [
 ];
 
 const rooms = new Map();
+const completedMemories = new Map();
+
+function fromDbMemory(row) {
+  return {
+    slug: row.slug,
+    prompt: row.prompt,
+    memoryLoss: row.memory_loss,
+    createdAt: row.created_at instanceof Date ? row.created_at.toISOString() : row.created_at,
+    completedAt: row.completed_at instanceof Date ? row.completed_at.toISOString() : row.completed_at,
+    submissions: row.submissions,
+  };
+}
+
+async function initMemoryStore() {
+  if (!memoryPool) {
+    loadMemories();
+    return;
+  }
+
+  try {
+    await memoryPool.query(`
+      CREATE TABLE IF NOT EXISTS memories (
+        slug TEXT PRIMARY KEY,
+        prompt TEXT NOT NULL,
+        memory_loss INTEGER,
+        created_at TIMESTAMPTZ NOT NULL,
+        completed_at TIMESTAMPTZ NOT NULL,
+        submissions JSONB NOT NULL
+      )
+    `);
+  } catch (error) {
+    console.warn("Could not initialize Postgres memory store; using local JSON fallback", error);
+    memoryPool = null;
+    loadMemories();
+  }
+}
+
+function loadMemories() {
+  if (!existsSync(memoryStorePath)) return;
+
+  try {
+    const parsed = JSON.parse(readFileSync(memoryStorePath, "utf8"));
+    if (!Array.isArray(parsed)) return;
+    for (const memory of parsed) {
+      if (memory?.slug) completedMemories.set(memory.slug, memory);
+    }
+  } catch (error) {
+    console.warn("Could not load completed memories", error);
+  }
+}
+
+function persistMemories() {
+  try {
+    mkdirSync(path.dirname(memoryStorePath), { recursive: true });
+    const memories = [...completedMemories.values()].sort((a, b) => String(b.completedAt).localeCompare(String(a.completedAt)));
+    writeFileSync(memoryStorePath, JSON.stringify(memories, null, 2));
+  } catch (error) {
+    console.warn("Could not persist completed memories", error);
+  }
+}
+
+async function listMemories() {
+  if (memoryPool) {
+    const result = await memoryPool.query(`
+      SELECT slug, prompt, memory_loss, created_at, completed_at, submissions
+      FROM memories
+      ORDER BY completed_at DESC
+      LIMIT 20
+    `);
+    return result.rows.map(fromDbMemory);
+  }
+
+  return [...completedMemories.values()]
+    .sort((a, b) => String(b.completedAt).localeCompare(String(a.completedAt)))
+    .slice(0, 20);
+}
+
+async function getMemory(slug) {
+  if (memoryPool) {
+    const result = await memoryPool.query(
+      `SELECT slug, prompt, memory_loss, created_at, completed_at, submissions FROM memories WHERE slug = $1`,
+      [slug],
+    );
+    return result.rows[0] ? fromDbMemory(result.rows[0]) : null;
+  }
+
+  return completedMemories.get(slug) ?? null;
+}
 
 function makeRoomCode() {
   for (let index = 0; index < 40; index += 1) {
@@ -124,6 +222,56 @@ function latestGuessText(room) {
   return latestSubmission(room, "guess")?.content ?? room.prompt;
 }
 
+function publicMemory(memory) {
+  return {
+    slug: memory.slug,
+    prompt: memory.prompt,
+    memoryLoss: memory.memoryLoss,
+    createdAt: memory.createdAt,
+    completedAt: memory.completedAt,
+    submissions: memory.submissions,
+  };
+}
+
+async function saveCompletedMemory(room) {
+  let existing = null;
+  try {
+    existing = await getMemory(room.slug);
+  } catch (error) {
+    console.warn("Could not check existing memory before save", error);
+  }
+  if (existing) return existing;
+
+  const memory = {
+    slug: room.slug,
+    prompt: room.prompt,
+    memoryLoss: room.memoryLoss,
+    createdAt: room.createdAt,
+    completedAt: new Date().toISOString(),
+    submissions: room.submissions,
+  };
+
+  if (memoryPool) {
+    try {
+      await memoryPool.query(
+        `
+          INSERT INTO memories (slug, prompt, memory_loss, created_at, completed_at, submissions)
+          VALUES ($1, $2, $3, $4, $5, $6)
+          ON CONFLICT (slug) DO NOTHING
+        `,
+        [memory.slug, memory.prompt, memory.memoryLoss, memory.createdAt, memory.completedAt, JSON.stringify(memory.submissions)],
+      );
+      return memory;
+    } catch (error) {
+      console.warn("Could not save completed memory to Postgres; using local JSON fallback", error);
+    }
+  }
+
+  completedMemories.set(memory.slug, memory);
+  persistMemories();
+  return memory;
+}
+
 const app = express();
 const httpServer = createServer(app);
 const io = new Server(httpServer, {
@@ -134,7 +282,26 @@ const io = new Server(httpServer, {
 });
 
 app.get("/health", (_request, response) => {
-  response.json({ ok: true, rooms: rooms.size });
+  response.json({ ok: true, rooms: rooms.size, memories: completedMemories.size });
+});
+
+app.get("/api/memories", async (_request, response) => {
+  try {
+    const memories = (await listMemories()).map(publicMemory);
+    response.json({ memories });
+  } catch (error) {
+    response.status(500).json({ error: "could not load memories" });
+  }
+});
+
+app.get("/api/memories/:slug", async (request, response) => {
+  const memory = await getMemory(String(request.params.slug ?? ""));
+  if (!memory) {
+    response.status(404).json({ error: "memory not found" });
+    return;
+  }
+
+  response.json({ memory: publicMemory(memory) });
 });
 
 if (existsSync(distPath)) {
@@ -206,7 +373,7 @@ io.on("connection", (socket) => {
     emitRoom(io, room);
   });
 
-  socket.on("submission:drawing", ({ code, imageUrl }) => {
+  socket.on("submission:drawing", async ({ code, imageUrl }) => {
     const room = rooms.get(String(code ?? "").toUpperCase());
     if (!room || room.phase !== "draw" || typeof imageUrl !== "string") return;
     room.submissions.push({
@@ -219,13 +386,14 @@ io.on("connection", (socket) => {
     if (room.submissions.length >= MAX_CHAIN_STEPS - 1) {
       room.memoryLoss = estimateMemoryLoss(room.prompt, latestGuessText(room));
       setPhase(room, "reveal");
+      await saveCompletedMemory(room);
     } else {
       setPhase(room, "guess");
     }
     emitRoom(io, room);
   });
 
-  socket.on("submission:guess", ({ code, guess }) => {
+  socket.on("submission:guess", async ({ code, guess }) => {
     const room = rooms.get(String(code ?? "").toUpperCase());
     const text = String(guess ?? "").trim().slice(0, 120);
     if (!room || room.phase !== "guess" || !text) return;
@@ -239,6 +407,7 @@ io.on("connection", (socket) => {
     if (room.submissions.length >= MAX_CHAIN_STEPS - 1) {
       room.memoryLoss = estimateMemoryLoss(room.prompt, text);
       setPhase(room, "reveal");
+      await saveCompletedMemory(room);
     } else {
       setPhase(room, "draw");
     }
@@ -265,6 +434,8 @@ io.on("connection", (socket) => {
     }
   });
 });
+
+await initMemoryStore();
 
 httpServer.listen(PORT, HOST, () => {
   console.log(`Bad Memory server listening on http://${HOST}:${PORT}`);

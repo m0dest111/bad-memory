@@ -3,6 +3,7 @@ node_modules/
 dist/
 outputs/
 work/
+data/
 .env
 .env.local
 npm-debug.log*

@@ -97,12 +97,24 @@ try {
   assert(reveal.submissions.filter((submission) => submission.type === "drawing").length === 4, "chain should include four drawings");
   assert(reveal.submissions.filter((submission) => submission.type === "guess").length === 3, "chain should include three guesses");
 
+  const savedResponse = await fetch(`${SERVER_URL}/api/memories/${reveal.slug}`);
+  assert(savedResponse.ok, "saved chain should be available by share slug");
+  const saved = await savedResponse.json();
+  assert(saved.memory.slug === reveal.slug, "saved chain slug should match reveal slug");
+  assert(saved.memory.submissions.length === 7, "saved chain should include the full submission history");
+
+  const archiveResponse = await fetch(`${SERVER_URL}/api/memories`);
+  assert(archiveResponse.ok, "archive endpoint should load");
+  const archive = await archiveResponse.json();
+  assert(archive.memories.some((memory) => memory.slug === reveal.slug), "archive should include the completed chain");
+
   console.log(JSON.stringify({
     ok: true,
     code: reveal.code,
     prompt: reveal.prompt,
     memoryLoss: reveal.memoryLoss,
     submissions: reveal.submissions.length,
+    savedSlug: saved.memory.slug,
   }));
 } finally {
   host.disconnect();

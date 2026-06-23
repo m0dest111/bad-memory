@@ -43,6 +43,15 @@ type RoomState = {
   submissions: Submission[];
 };
 
+type MemoryRecord = {
+  slug: string;
+  prompt: string;
+  memoryLoss: number | null;
+  createdAt: string;
+  completedAt: string;
+  submissions: Submission[];
+};
+
 function latestSubmission(submissions: Submission[], type: Submission["type"]) {
   for (let index = submissions.length - 1; index >= 0; index -= 1) {
     if (submissions[index].type === type) return submissions[index];
@@ -54,6 +63,11 @@ function formatTimer(milliseconds: number | null) {
   if (milliseconds === null) return "--:--";
   const seconds = Math.max(0, Math.ceil(milliseconds / 1000));
   return `${String(Math.floor(seconds / 60)).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`;
+}
+
+function shareLink(slug?: string) {
+  if (!slug) return "";
+  return `${window.location.origin}/m/${slug}`;
 }
 
 function PixelAvatar({ avatar, color }: { avatar: string; color: string }) {
@@ -281,6 +295,19 @@ function App() {
   const [roomCodeInput, setRoomCodeInput] = useState("");
   const [now, setNow] = useState(Date.now());
   const [showHelp, setShowHelp] = useState(true);
+  const [sharedMemory, setSharedMemory] = useState<MemoryRecord | null>(null);
+  const [archiveMemories, setArchiveMemories] = useState<MemoryRecord[]>([]);
+
+  async function refreshArchive() {
+    try {
+      const response = await fetch("/api/memories");
+      if (!response.ok) return;
+      const data = await response.json();
+      setArchiveMemories(Array.isArray(data.memories) ? data.memories : []);
+    } catch {
+      // Archive is non-critical for active play.
+    }
+  }
 
   useEffect(() => {
     const socketUrl = import.meta.env.VITE_SOCKET_URL ?? (import.meta.env.DEV ? "http://127.0.0.1:3001" : undefined);
@@ -312,7 +339,10 @@ function App() {
         setNotice(`step ${nextRoom.submissions.length + 2} / 8. draw what the last person guessed.`);
       }
       if (nextRoom.phase === "guess") setNotice("drawing submitted. guess what survived the handoff.");
-      if (nextRoom.phase === "reveal") setNotice("chain complete. the collapse is ready to share.");
+      if (nextRoom.phase === "reveal") {
+        setNotice("chain saved. copy the share link.");
+        refreshArchive();
+      }
     });
 
     nextSocket.on("room:error", (message: string) => {
@@ -327,26 +357,48 @@ function App() {
   }, []);
 
   useEffect(() => {
+    refreshArchive();
+
+    const match = window.location.pathname.match(/^\/m\/([^/]+)/);
+    if (!match) return;
+
+    setShowHelp(false);
+    fetch(`/api/memories/${encodeURIComponent(match[1])}`)
+      .then((response) => {
+        if (!response.ok) throw new Error("memory not found");
+        return response.json();
+      })
+      .then((data) => {
+        setSharedMemory(data.memory);
+        setNotice("saved chain loaded.");
+      })
+      .catch(() => {
+        setNotice("that saved chain could not be found.");
+      });
+  }, []);
+
+  useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 500);
     return () => window.clearInterval(timer);
   }, []);
 
-  const phase = room?.phase ?? "idle";
+  const phase = sharedMemory ? "reveal" : room?.phase ?? "idle";
   const roomCreated = Boolean(room);
-  const gameStarted = phase === "draw" || phase === "guess" || phase === "reveal";
+  const gameStarted = !sharedMemory && (phase === "draw" || phase === "guess" || phase === "reveal");
   const isHost = Boolean(room?.players.some((player) => player.id === socket?.id && player.role === "HOST"));
-  const prompt = room?.prompt ?? "create a room to receive a prompt";
-  const submissions = room?.submissions ?? [];
+  const prompt = sharedMemory?.prompt ?? room?.prompt ?? "create a room to receive a prompt";
+  const submissions = sharedMemory?.submissions ?? room?.submissions ?? [];
   const drawingSubmission = latestSubmission(submissions, "drawing");
   const guessSubmission = latestSubmission(submissions, "guess");
   const drawingUrl = drawingSubmission?.content;
   const currentDrawPrompt = guessSubmission?.content ?? prompt;
   const finalGuess = guessSubmission?.content ?? "";
   const currentStep = Math.min(submissions.length + 2, 8);
-  const memoryLoss = room?.memoryLoss ?? null;
+  const memoryLoss = sharedMemory?.memoryLoss ?? room?.memoryLoss ?? null;
   const timerMs = room?.phaseEndsAt && (phase === "draw" || phase === "guess") ? new Date(room.phaseEndsAt).getTime() - now : null;
   const timerLabel = formatTimer(timerMs);
-  const shareUrl = "public share links not built yet";
+  const activeSlug = sharedMemory?.slug ?? room?.slug;
+  const shareUrl = shareLink(activeSlug);
   const drawingCount = submissions.filter((submission) => submission.type === "drawing").length;
   const guessCount = submissions.filter((submission) => submission.type === "guess").length;
   const lobbySlots: Player[] = Array.from({ length: 12 }, (_, index) => {
@@ -418,6 +470,7 @@ function App() {
   }
 
   async function copyText(kind: "room" | "link", text: string) {
+    if (!text) return;
     try {
       await navigator.clipboard.writeText(text);
       setCopied(kind);
@@ -468,7 +521,7 @@ function App() {
         <section className="panel lobby">
           <header className="lobby-bar">
             <strong>LOBBY</strong>
-            <span>ROOM CODE: <b>{room?.code ?? "------"}</b></span>
+            <span>{sharedMemory ? "SAVED CHAIN" : "ROOM CODE"}: <b>{sharedMemory?.slug ?? room?.code ?? "------"}</b></span>
             <button disabled={!room} onClick={() => room && copyText("room", room.code)}>{copied === "room" ? "COPIED" : "COPY"}</button>
             <em>{room?.players.length ?? 0} / 12 PLAYERS</em>
           </header>
@@ -483,9 +536,10 @@ function App() {
           </div>
           <div className="lobby-actions">
             <p className="waiting">
-              {phase === "idle" && "create or join a room to start"}
-              {phase === "lobby" && "waiting for host to start the game..."}
-              {gameStarted && "game in progress"}
+              {sharedMemory && "viewing a saved chain"}
+              {!sharedMemory && phase === "idle" && "create or join a room to start"}
+              {!sharedMemory && phase === "lobby" && "waiting for host to start the game..."}
+              {!sharedMemory && gameStarted && "game in progress"}
             </p>
             <button className="hot" disabled={phase !== "lobby" || !isHost} onClick={startGame}>
               {gameStarted ? "GAME STARTED" : "START GAME"}
@@ -519,7 +573,7 @@ function App() {
         <section className={phase === "reveal" ? "panel reveal active-round" : "panel reveal dimmed-round"}>
             <header>
               <h2>THE REVEAL</h2>
-            <span>CHAIN #{room?.slug ?? "-----"}</span>
+            <span>CHAIN #{activeSlug ?? "-----"}</span>
             <strong>MEMORY LOSS: <b>{phase === "reveal" && memoryLoss !== null ? `${memoryLoss}%` : "--"}</b></strong>
           </header>
           <div className="chain">
@@ -551,8 +605,8 @@ function App() {
               <strong>{phase === "reveal" && memoryLoss !== null ? `${memoryLoss}%` : "--"}</strong>
             </div>
             <footer>
-              <code>{phase === "reveal" ? shareUrl : "complete a chain to unlock result summary"}</code>
-              <button disabled>SHARE SOON</button>
+              <code>{phase === "reveal" ? shareUrl : "complete a chain to unlock a share link"}</code>
+              <button disabled={phase !== "reveal" || !shareUrl} onClick={() => copyText("link", shareUrl)}>{copied === "link" ? "COPIED" : "COPY LINK"}</button>
             </footer>
           </section>
 
@@ -572,21 +626,36 @@ function App() {
             <header>
               <h2>ARCHIVE <small>(SOON)</small></h2>
               <nav>
-                <button disabled>NEWEST</button>
-                <button className="hot" disabled>MOST DISTORTED</button>
-                <button disabled>MOST VIEWED</button>
-                <button disabled>FUNNIEST</button>
+                <button className="hot" disabled>NEWEST SAVED</button>
               </nav>
             </header>
-            <div className="archive-empty">
-              <div className="archive-pixel-stamp" aria-hidden="true">
-                <span />
+            {archiveMemories.length > 0 ? (
+              <div className="gallery-row">
+                {archiveMemories.slice(0, 5).map((memory) => {
+                  const preview = latestSubmission(memory.submissions, "drawing")?.content;
+                  return (
+                    <article key={memory.slug}>
+                      <SubmittedDrawing src={preview} />
+                      <p>{memory.prompt}</p>
+                      <footer>
+                        <b>{memory.memoryLoss ?? "--"}%</b>
+                        <a href={`/m/${memory.slug}`}>OPEN</a>
+                      </footer>
+                    </article>
+                  );
+                })}
               </div>
-              <div>
-                <strong>No public memories yet.</strong>
-                <p>Completed live-test chains stay in the current room for now. Persistence and public archive pages are next.</p>
+            ) : (
+              <div className="archive-empty">
+                <div className="archive-pixel-stamp" aria-hidden="true">
+                  <span />
+                </div>
+                <div>
+                  <strong>No saved memories yet.</strong>
+                  <p>Completed chains will appear here after the reveal.</p>
+                </div>
               </div>
-            </div>
+            )}
           </section>
         </section>
 
@@ -594,7 +663,7 @@ function App() {
           <span>© 2026 BAD MEMORY</span>
           <span>LIVE TEST BUILD</span>
           <span>NO ACCOUNTS</span>
-          <span>NO PERSISTENT ARCHIVE YET</span>
+          <span>SAVED CHAINS ENABLED</span>
           <strong>☻</strong>
         </footer>
       </section>

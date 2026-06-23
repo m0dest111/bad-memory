@@ -13,6 +13,7 @@
     "@fontsource/vt323": "^5.2.7",
     "@vitejs/plugin-react": "^4.3.4",
     "express": "^5.2.1",
+    "pg": "^8.22.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "socket.io": "^4.8.3",
