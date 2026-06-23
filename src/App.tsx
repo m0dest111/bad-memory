@@ -341,7 +341,7 @@ function App() {
       if (nextRoom.phase === "lobby") setNotice(`room ${nextRoom.code} created. host can start.`);
       if (nextRoom.phase === "draw") {
         setGuess("");
-        setNotice(`step ${nextRoom.submissions.length + 2} / 8. draw what the last person guessed.`);
+        setNotice(`step ${nextRoom.submissions.length + 1} / 8. draw what the last person guessed.`);
       }
       if (nextRoom.phase === "guess") setNotice("drawing submitted. guess what survived the handoff.");
       if (nextRoom.phase === "reveal") {
@@ -398,7 +398,9 @@ function App() {
   const drawingUrl = drawingSubmission?.content;
   const currentDrawPrompt = guessSubmission?.content ?? prompt;
   const finalGuess = guessSubmission?.content ?? "";
-  const currentStep = Math.min(submissions.length + 2, 8);
+  const currentStep = Math.min(submissions.length + 1, 8);
+  const drawStep = phase === "guess" ? Math.min(currentStep + 1, 8) : currentStep;
+  const guessStep = phase === "draw" || phase === "idle" || phase === "lobby" ? Math.min(currentStep + 1, 8) : currentStep;
   const memoryLoss = sharedMemory?.memoryLoss ?? room?.memoryLoss ?? null;
   const timerMs = room?.phaseEndsAt && (phase === "draw" || phase === "guess") ? new Date(room.phaseEndsAt).getTime() - now : null;
   const timerLabel = formatTimer(timerMs);
@@ -553,10 +555,10 @@ function App() {
         </section>
 
         <div className="round-grid">
-          <DrawingCanvas isActive={phase === "draw"} prompt={currentDrawPrompt} roundNumber={currentStep} timerLabel={timerLabel} onSubmit={submitDrawing} />
+          <DrawingCanvas isActive={phase === "draw"} prompt={currentDrawPrompt} roundNumber={drawStep} timerLabel={timerLabel} onSubmit={submitDrawing} />
           <section className={phase === "guess" ? "panel game-panel active-round" : "panel game-panel dimmed-round"}>
             <header className="panel-title">
-              <span>STEP {currentStep} / 8</span>
+              <span>STEP {guessStep} / 8</span>
               <span>GUESS</span>
               <time>{phase === "guess" ? timerLabel : "--:--"}</time>
             </header>
