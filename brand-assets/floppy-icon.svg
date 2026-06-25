@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" role="img" aria-label="Pixel floppy icon">
+  <rect width="256" height="256" fill="#020202"/>
+  <path fill="#ec4b9d" d="M40 32h144l32 32v160H40z"/>
+  <rect x="64" y="56" width="88" height="56" fill="#50e0ca"/>
+  <rect x="152" y="56" width="32" height="56" fill="#020202"/>
+  <rect x="72" y="160" width="112" height="40" fill="#4a1531"/>
+</svg>

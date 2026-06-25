@@ -40,6 +40,8 @@ type RoomState = {
   createdAt: string;
   phaseStartedAt?: string;
   phaseEndsAt: string | null;
+  activePlayerId: string | null;
+  activePlayerName: string | null;
   players: Player[];
   submissions: Submission[];
 };
@@ -167,12 +169,14 @@ function SubmittedDrawing({ src, large = false }: { src?: string; large?: boolea
 
 function DrawingCanvas({
   isActive,
+  waitingLabel,
   prompt,
   roundNumber,
   timerLabel,
   onSubmit,
 }: {
   isActive: boolean;
+  waitingLabel: string;
   prompt: string;
   roundNumber: number;
   timerLabel: string;
@@ -208,6 +212,7 @@ function DrawingCanvas({
   }
 
   function begin(event: React.PointerEvent<HTMLCanvasElement>) {
+    if (!isActive) return;
     const canvas = canvasRef.current;
     if (!canvas) return;
     drawing.current = true;
@@ -265,7 +270,7 @@ function DrawingCanvas({
         <span>DRAW</span>
         <time>{isActive ? timerLabel : "--:--"}</time>
       </header>
-      <p className="prompt">{isActive ? <>PROMPT: <mark>{prompt}</mark></> : "PROMPT: waiting for the draw step"}</p>
+      <p className="prompt">{isActive ? <>PROMPT: <mark>{prompt}</mark></> : waitingLabel}</p>
       <div className="draw-layout">
         <div className="tools" aria-label="Drawing tools">
           <button className={tool === "pencil" ? "active" : ""} onClick={() => setTool("pencil")} aria-label="Pencil">✎</button>
@@ -367,9 +372,19 @@ function App() {
       if (nextRoom.phase === "lobby") setNotice(`room ${nextRoom.code} created. host can start.`);
       if (nextRoom.phase === "draw") {
         setGuess("");
-        setNotice(`step ${nextRoom.submissions.length + 1} / 8. draw what the last person guessed.`);
+        setNotice(
+          nextRoom.activePlayerId === playerId
+            ? `step ${nextRoom.submissions.length + 1} / 8. your turn to draw.`
+            : `${nextRoom.activePlayerName ?? "another player"} is drawing.`,
+        );
       }
-      if (nextRoom.phase === "guess") setNotice("drawing submitted. guess what survived the handoff.");
+      if (nextRoom.phase === "guess") {
+        setNotice(
+          nextRoom.activePlayerId === playerId
+            ? "your turn to guess what survived the handoff."
+            : `${nextRoom.activePlayerName ?? "another player"} is guessing.`,
+        );
+      }
       if (nextRoom.phase === "reveal") {
         setNotice("chain saved. copy the share link.");
         refreshArchive();
@@ -420,6 +435,8 @@ function App() {
   const roomCreated = Boolean(room);
   const gameStarted = !sharedMemory && (phase === "draw" || phase === "guess" || phase === "reveal");
   const isHost = Boolean(room?.players.some((player) => player.id === playerId && player.role === "HOST"));
+  const isMyTurn = Boolean(room?.activePlayerId === playerId);
+  const activePlayerName = room?.activePlayerName ?? "another player";
   const prompt = sharedMemory?.prompt ?? room?.prompt ?? "create a room to receive a prompt";
   const submissions = sharedMemory?.submissions ?? room?.submissions ?? [];
   const drawingSubmission = latestSubmission(submissions, "drawing");
@@ -584,24 +601,32 @@ function App() {
         </section>
 
         <div className="round-grid">
-          <DrawingCanvas isActive={phase === "draw"} prompt={currentDrawPrompt} roundNumber={drawStep} timerLabel={timerLabel} onSubmit={submitDrawing} />
-          <section className={phase === "guess" ? "panel game-panel active-round" : "panel game-panel dimmed-round"}>
+          <DrawingCanvas
+            isActive={phase === "draw" && isMyTurn}
+            waitingLabel={phase === "draw" ? `WAITING FOR ${activePlayerName} TO DRAW` : "PROMPT: waiting for the draw step"}
+            prompt={currentDrawPrompt}
+            roundNumber={drawStep}
+            timerLabel={timerLabel}
+            onSubmit={submitDrawing}
+          />
+          <section className={phase === "guess" && isMyTurn ? "panel game-panel active-round" : "panel game-panel dimmed-round"}>
             <header className="panel-title">
               <span>STEP {guessStep} / 8</span>
               <span>GUESS</span>
-              <time>{phase === "guess" ? timerLabel : "--:--"}</time>
+              <time>{phase === "guess" && isMyTurn ? timerLabel : "--:--"}</time>
             </header>
             <p className="prompt">WHAT IS THIS?</p>
-            {phase === "guess" ? <SubmittedDrawing src={drawingUrl} large /> : <div className="submitted-drawing submitted-drawing--large empty-drawing"><span>waiting for a drawing</span></div>}
+            {phase === "guess" && isMyTurn ? <SubmittedDrawing src={drawingUrl} large /> : <div className="submitted-drawing submitted-drawing--large empty-drawing"><span>{phase === "guess" ? `waiting for ${activePlayerName} to guess` : "waiting for a drawing"}</span></div>}
             <textarea
               value={guess}
               maxLength={120}
+              disabled={phase !== "guess" || !isMyTurn}
               onChange={(event) => setGuess(event.target.value)}
               aria-label="Guess"
             />
             <footer className="panel-actions">
               <span>{guess.length} / 120</span>
-              <button className="hot" disabled={phase !== "guess" || guess.trim().length === 0} onClick={submitGuess}>SUBMIT</button>
+              <button className="hot" disabled={phase !== "guess" || !isMyTurn || guess.trim().length === 0} onClick={submitGuess}>SUBMIT</button>
             </footer>
           </section>
         </div>

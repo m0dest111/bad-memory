@@ -1,0 +1,4 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" role="img" aria-label="Pixel spark icon">
+  <rect width="256" height="256" fill="#020202"/>
+  <path fill="#ffe43e" d="M104 24h48v80h80v48h-80v80h-48v-80H24v-48h80z"/>
+</svg>

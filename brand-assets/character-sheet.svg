@@ -1,0 +1,50 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="420" viewBox="0 0 1200 420" role="img" aria-label="Bad Memory character sheet">
+  <rect width="1200" height="420" fill="#020202"/>
+  <text x="40" y="64" fill="#ec4b9d" font-family="monospace" font-size="40" font-weight="900">BAD MEMORY CHARACTER EXAMPLES</text>
+  <g transform="translate(80 120)">
+    <use href="#wizard"/>
+    <text x="0" y="230" fill="#59df50" font-family="monospace" font-size="24">WIZARD</text>
+  </g>
+  <g transform="translate(340 120)">
+    <use href="#frog"/>
+    <text x="0" y="230" fill="#59df50" font-family="monospace" font-size="24">FROG</text>
+  </g>
+  <g transform="translate(600 120)">
+    <use href="#skull"/>
+    <text x="0" y="230" fill="#59df50" font-family="monospace" font-size="24">SKULL</text>
+  </g>
+  <g transform="translate(860 120)">
+    <use href="#pirate"/>
+    <text x="0" y="230" fill="#59df50" font-family="monospace" font-size="24">PIRATE</text>
+  </g>
+  <defs>
+    <g id="wizard">
+      <path fill="#4ea1ff" d="M32 160h160l-20-92h44l-88-44-16-64-24 64-80 44h52z"/>
+      <path fill="#174fbc" d="M32 44h160v28H32zM88-48h48l40 112H48z"/>
+      <rect x="72" y="68" width="24" height="24" fill="#020202"/>
+      <rect x="128" y="68" width="24" height="24" fill="#020202"/>
+      <rect x="100" y="112" width="32" height="16" fill="#020202"/>
+    </g>
+    <g id="frog">
+      <path fill="#63d65f" d="M24 80l16-48h48l24 32 24-32h48l16 48 16 64-40 40H48L8 144z"/>
+      <rect x="64" y="52" width="24" height="32" fill="#f1f1ed"/>
+      <rect x="136" y="52" width="24" height="32" fill="#f1f1ed"/>
+      <rect x="72" y="60" width="16" height="24" fill="#020202"/>
+      <rect x="136" y="60" width="16" height="24" fill="#020202"/>
+      <rect x="72" y="132" width="80" height="10" fill="#020202"/>
+    </g>
+    <g id="skull">
+      <path fill="#b850ff" d="M48 8h128v24h24v64h-16v48h-32v48h-24v-40H96v40H72v-48H40V96H24V32h24z"/>
+      <rect x="64" y="60" width="34" height="34" fill="#020202"/>
+      <rect x="126" y="60" width="34" height="34" fill="#020202"/>
+      <rect x="96" y="114" width="32" height="18" fill="#020202"/>
+    </g>
+    <g id="pirate">
+      <path fill="#d8956f" d="M48 48h128l24 56-32 80H56l-32-80z"/>
+      <path fill="#1b1b1b" d="M16 60h192l-16 32H32zM48 56l36-56 44 56 48-56 32 56z"/>
+      <rect x="68" y="102" width="32" height="20" fill="#020202"/>
+      <rect x="124" y="102" width="36" height="20" fill="#020202"/>
+      <rect x="76" y="146" width="76" height="14" fill="#020202"/>
+    </g>
+  </defs>
+</svg>

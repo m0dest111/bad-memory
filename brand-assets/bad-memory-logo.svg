@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" role="img" aria-labelledby="title desc">
+  <title id="title">Bad Memory logo</title>
+  <desc id="desc">Pixel styled Bad Memory logo with a skull mark.</desc>
+  <rect width="1200" height="630" fill="#020202"/>
+  <g opacity=".2" stroke="#f1f1ed" stroke-width="2">
+    <path d="M0 40h1200M0 80h1200M0 120h1200M0 160h1200M0 200h1200M0 240h1200M0 280h1200M0 320h1200M0 360h1200M0 400h1200M0 440h1200M0 480h1200M0 520h1200M0 560h1200M0 600h1200"/>
+  </g>
+  <g font-family="monospace" font-weight="900" font-size="170" letter-spacing="-10">
+    <text x="70" y="205" fill="#ec4b9d" stroke="#a92b73" stroke-width="7">BAD</text>
+    <text x="70" y="380" fill="#ffe43e" stroke="#8c760a" stroke-width="7">MEMORY</text>
+  </g>
+  <g transform="translate(820 105)">
+    <path fill="#f1f1ed" d="M38 0h126v21h21v42h21v84h-42v42h-21v-21h-21v42h-21v-42H80v21H59v-42H17V63h21z"/>
+    <rect x="59" y="63" width="32" height="32" fill="#020202"/>
+    <rect x="122" y="63" width="32" height="32" fill="#020202"/>
+    <rect x="101" y="112" width="21" height="42" fill="#020202"/>
+  </g>
+  <text x="76" y="486" fill="#59df50" font-family="monospace" font-weight="800" font-size="34">THE DRAWING GAME ABOUT WHAT SURVIVES OTHER PEOPLE</text>
+</svg>

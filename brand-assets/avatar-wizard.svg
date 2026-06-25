@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" role="img" aria-label="Wizard avatar">
+  <rect width="256" height="256" fill="#020202"/>
+  <path fill="#4ea1ff" d="M48 224h160l-20-92h44l-88-44-16-64-24 64-80 44h52z"/>
+  <path fill="#174fbc" d="M48 108h160v28H48zM104 16h48l40 112H64z"/>
+  <rect x="88" y="132" width="24" height="24" fill="#020202"/>
+  <rect x="144" y="132" width="24" height="24" fill="#020202"/>
+  <rect x="116" y="176" width="32" height="16" fill="#020202"/>
+  <rect x="136" y="44" width="18" height="18" fill="#ffe43e"/>
+</svg>

@@ -196,6 +196,9 @@ function normalizePrompt(prompt) {
 
 async function usedPrompts() {
   const used = new Set([...rooms.values()].map((room) => normalizePrompt(room.prompt)));
+  for (const room of rooms.values()) {
+    for (const chain of room.chains ?? []) used.add(normalizePrompt(chain.prompt));
+  }
   for (const prompt of reservedPrompts) used.add(prompt);
   if (memoryPool) {
     const result = await memoryPool.query("SELECT prompt FROM memories");
@@ -270,31 +273,54 @@ function setPhase(room, phase) {
   room.phaseEndsAt = phase === "draw" || phase === "guess" ? new Date(Date.now() + TURN_DURATION_MS).toISOString() : null;
 }
 
-function publicRoom(room) {
+function publicRoom(room, viewerPlayerId = null) {
+  const assignment = assignmentForPlayer(room, viewerPlayerId);
+  const fallbackChain = room.chains?.find((chain) => chain.originPlayerId === viewerPlayerId) ?? room.chains?.[0];
+  const visibleChain = assignment?.chain ?? fallbackChain;
+  const active = assignment && !assignment.submitted ? playerForId(room, viewerPlayerId) : null;
   return {
     code: room.code,
     phase: room.phase,
-    prompt: room.prompt,
-    slug: room.slug,
-    memoryLoss: room.memoryLoss,
+    prompt: visibleChain?.prompt ?? room.prompt,
+    slug: visibleChain?.slug ?? room.slug,
+    memoryLoss: visibleChain?.memoryLoss ?? room.memoryLoss,
     createdAt: room.createdAt,
     phaseStartedAt: room.phaseStartedAt,
     phaseEndsAt: room.phaseEndsAt,
+    activePlayerId: active?.id ?? null,
+    activePlayerName: active?.name ?? null,
     players: room.players.map(({ socketId, ...player }) => player),
-    submissions: room.submissions,
+    submissions: visibleChain?.submissions ?? room.submissions,
   };
 }
 
 function emitRoom(io, room) {
-  io.to(room.code).emit("room:update", publicRoom(room));
+  for (const player of room.players) {
+    if (player.socketId) io.to(player.socketId).emit("room:update", publicRoom(room, player.id));
+  }
 }
 
-function latestSubmission(room, type) {
-  return room.submissions.findLast((submission) => submission.type === type);
+function latestSubmission(submissions, type) {
+  return submissions.findLast((submission) => submission.type === type);
 }
 
-function latestGuessText(room) {
-  return latestSubmission(room, "guess")?.content ?? room.prompt;
+function latestGuessText(chain) {
+  return latestSubmission(chain.submissions, "guess")?.content ?? chain.prompt;
+}
+
+function assignmentForPlayer(room, playerId) {
+  if (room.phase !== "draw" && room.phase !== "guess") return null;
+  if (!room.chains?.length || room.players.length === 0) return null;
+  const playerIndex = room.players.findIndex((player) => player.id === playerId);
+  if (playerIndex < 0) return null;
+  const turnIndex = room.turnIndex ?? 0;
+  const chainIndex = ((playerIndex - turnIndex) % room.players.length + room.players.length) % room.players.length;
+  const chain = room.chains[chainIndex];
+  return {
+    chain,
+    submitted: Boolean(chain?.submissions.length > turnIndex),
+    type: room.phase,
+  };
 }
 
 function playerForSocket(room, socketId) {
@@ -373,6 +399,62 @@ async function saveCompletedMemory(room) {
   return memory;
 }
 
+async function saveCompletedChain(room, chain) {
+  chain.memoryLoss = estimateMemoryLoss(chain.prompt, latestGuessText(chain));
+
+  const memory = {
+    slug: chain.slug,
+    prompt: chain.prompt,
+    memoryLoss: chain.memoryLoss,
+    createdAt: room.createdAt,
+    completedAt: new Date().toISOString(),
+    submissions: chain.submissions,
+  };
+
+  if (memoryPool) {
+    try {
+      await memoryPool.query(
+        `
+          INSERT INTO memories (slug, prompt, memory_loss, created_at, completed_at, submissions)
+          VALUES ($1, $2, $3, $4, $5, $6)
+          ON CONFLICT (slug) DO NOTHING
+        `,
+        [memory.slug, memory.prompt, memory.memoryLoss, memory.createdAt, memory.completedAt, JSON.stringify(memory.submissions)],
+      );
+      return memory;
+    } catch (error) {
+      console.warn("Could not save completed chain to Postgres; using local JSON fallback", error);
+    }
+  }
+
+  completedMemories.set(memory.slug, memory);
+  persistMemories();
+  return memory;
+}
+
+async function completeRoom(room) {
+  room.memoryLoss = null;
+  setPhase(room, "reveal");
+  for (const chain of room.chains ?? []) {
+    await saveCompletedChain(room, chain);
+  }
+}
+
+function everyPlayerSubmitted(room) {
+  return room.players.every((player) => assignmentForPlayer(room, player.id)?.submitted);
+}
+
+async function advanceTurn(room) {
+  if (!everyPlayerSubmitted(room)) return;
+  if ((room.turnIndex ?? 0) >= MAX_CHAIN_STEPS - 2) {
+    await completeRoom(room);
+    return;
+  }
+
+  room.turnIndex = (room.turnIndex ?? 0) + 1;
+  setPhase(room, room.turnIndex % 2 === 0 ? "draw" : "guess");
+}
+
 const app = express();
 const httpServer = createServer(app);
 const io = new Server(httpServer, {
@@ -416,11 +498,10 @@ io.on("connection", (socket) => {
   socket.on("room:create", async ({ playerId } = {}) => {
     const stablePlayerId = normalizePlayerId(playerId, socket.id);
     const code = makeRoomCode();
-    const prompt = await randomPrompt();
     const room = {
       code,
       phase: "lobby",
-      prompt,
+      prompt: "waiting for the host to start",
       slug: makeSlug(),
       memoryLoss: null,
       createdAt: new Date().toISOString(),
@@ -432,7 +513,6 @@ io.on("connection", (socket) => {
     };
 
     rooms.set(code, room);
-    reservedPrompts.delete(normalizePrompt(prompt));
     socket.join(code);
     emitRoom(io, room);
   });
@@ -489,7 +569,7 @@ io.on("connection", (socket) => {
     emitRoom(io, room);
   });
 
-  socket.on("game:start", ({ code }) => {
+  socket.on("game:start", async ({ code }) => {
     const room = rooms.get(String(code ?? "").toUpperCase());
     if (!room) return;
     const player = playerForSocket(room, socket.id);
@@ -497,6 +577,26 @@ io.on("connection", (socket) => {
       socket.emit("room:error", "only the host can start this room");
       return;
     }
+    if (room.players.length < 2) {
+      socket.emit("room:error", "invite at least one more player before starting");
+      return;
+    }
+    room.chains = [];
+    for (const roomPlayer of room.players) {
+      const prompt = await randomPrompt();
+      room.chains.push({
+        id: makeSlug(),
+        slug: makeSlug(),
+        originPlayerId: roomPlayer.id,
+        prompt,
+        memoryLoss: null,
+        submissions: [],
+      });
+      reservedPrompts.delete(normalizePrompt(prompt));
+    }
+    room.prompt = room.chains[0]?.prompt ?? room.prompt;
+    room.slug = room.chains[0]?.slug ?? room.slug;
+    room.turnIndex = 0;
     setPhase(room, "draw");
     room.submissions = [];
     room.memoryLoss = null;
@@ -507,20 +607,20 @@ io.on("connection", (socket) => {
     const room = rooms.get(String(code ?? "").toUpperCase());
     const player = room ? playerForSocket(room, socket.id) : null;
     if (!room || !player || room.phase !== "draw" || typeof imageUrl !== "string") return;
-    room.submissions.push({
+    const assignment = assignmentForPlayer(room, player.id);
+    if (!assignment || assignment.type !== "draw") return;
+    if (assignment.submitted) {
+      socket.emit("room:error", "you already submitted this turn");
+      return;
+    }
+    assignment.chain.submissions.push({
       id: `${Date.now()}-drawing`,
       type: "drawing",
       content: imageUrl,
       playerId: player.id,
       createdAt: new Date().toISOString(),
     });
-    if (room.submissions.length >= MAX_CHAIN_STEPS - 1) {
-      room.memoryLoss = estimateMemoryLoss(room.prompt, latestGuessText(room));
-      setPhase(room, "reveal");
-      await saveCompletedMemory(room);
-    } else {
-      setPhase(room, "guess");
-    }
+    await advanceTurn(room);
     emitRoom(io, room);
   });
 
@@ -529,20 +629,20 @@ io.on("connection", (socket) => {
     const player = room ? playerForSocket(room, socket.id) : null;
     const text = String(guess ?? "").trim().slice(0, 120);
     if (!room || !player || room.phase !== "guess" || !text) return;
-    room.submissions.push({
+    const assignment = assignmentForPlayer(room, player.id);
+    if (!assignment || assignment.type !== "guess") return;
+    if (assignment.submitted) {
+      socket.emit("room:error", "you already submitted this turn");
+      return;
+    }
+    assignment.chain.submissions.push({
       id: `${Date.now()}-guess`,
       type: "guess",
       content: text,
       playerId: player.id,
       createdAt: new Date().toISOString(),
     });
-    if (room.submissions.length >= MAX_CHAIN_STEPS - 1) {
-      room.memoryLoss = estimateMemoryLoss(room.prompt, text);
-      setPhase(room, "reveal");
-      await saveCompletedMemory(room);
-    } else {
-      setPhase(room, "draw");
-    }
+    await advanceTurn(room);
     emitRoom(io, room);
   });
 

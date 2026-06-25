@@ -1,0 +1,4 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" role="img" aria-label="Pixel cursor icon">
+  <rect width="256" height="256" fill="#020202"/>
+  <path fill="#f1f1ed" d="M48 24h32v32h32v32h32v32h32v32h-48v32h24v32h-32v-32H96v48H64V88H48z"/>
+</svg>

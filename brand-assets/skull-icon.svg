@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" role="img" aria-label="Bad Memory skull icon">
+  <rect width="256" height="256" fill="#020202"/>
+  <path fill="#f1f1ed" d="M56 24h144v24h24v56h16v64h-40v40h-24v-24h-24v48h-24v-48h-24v48h-24v-48H76v24H52v-40H16v-64h16V48h24z"/>
+  <rect x="76" y="88" width="36" height="36" fill="#020202"/>
+  <rect x="148" y="88" width="36" height="36" fill="#020202"/>
+  <rect x="116" y="144" width="24" height="48" fill="#020202"/>
+</svg>

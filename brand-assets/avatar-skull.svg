@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" role="img" aria-label="Purple skull avatar">
+  <rect width="256" height="256" fill="#020202"/>
+  <path fill="#b850ff" d="M64 32h128v24h24v64h-16v48h-32v48h-24v-40h-32v40H88v-48H56v-48H40V56h24z"/>
+  <rect x="80" y="84" width="34" height="34" fill="#020202"/>
+  <rect x="142" y="84" width="34" height="34" fill="#020202"/>
+  <rect x="112" y="138" width="32" height="18" fill="#020202"/>
+  <path fill="#020202" d="M88 176h16v24H88zm32 0h16v24h-16zm32 0h16v24h-16z"/>
+</svg>

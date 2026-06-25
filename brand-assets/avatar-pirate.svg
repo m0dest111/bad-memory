@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" role="img" aria-label="Pirate avatar">
+  <rect width="256" height="256" fill="#020202"/>
+  <path fill="#d8956f" d="M64 72h128l24 56-32 80H72l-32-80z"/>
+  <path fill="#1b1b1b" d="M32 84h192l-16 32H48zM64 80l36-56 44 56 48-56 32 56z"/>
+  <rect x="84" y="126" width="32" height="20" fill="#020202"/>
+  <rect x="140" y="126" width="36" height="20" fill="#020202"/>
+  <rect x="92" y="170" width="76" height="14" fill="#020202"/>
+  <path fill="#ffe43e" d="M168 44h16v16h-16zm16 16h16v16h-16z"/>
+</svg>
