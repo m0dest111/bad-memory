@@ -26,6 +26,13 @@ function assert(condition, message) {
   }
 }
 
+function makeClient() {
+  return io(SERVER_URL, {
+    transports: ["websocket", "polling"],
+    timeout: 3000,
+  });
+}
+
 async function waitForBoth(event, predicate) {
   return Promise.all([
     waitFor(host, event, predicate),
@@ -33,15 +40,10 @@ async function waitForBoth(event, predicate) {
   ]);
 }
 
-const host = io(SERVER_URL, {
-  transports: ["websocket", "polling"],
-  timeout: 3000,
-});
-
-const guest = io(SERVER_URL, {
-  transports: ["websocket", "polling"],
-  timeout: 3000,
-});
+const hostPlayerId = "smoke-host";
+const guestPlayerId = "smoke-guest";
+let host = makeClient();
+const guest = makeClient();
 
 try {
   await Promise.all([
@@ -49,17 +51,36 @@ try {
     waitFor(guest, "connect"),
   ]);
 
-  host.emit("room:create");
+  host.emit("room:create", { playerId: hostPlayerId });
   const lobby = await waitFor(host, "room:update", (room) => room.phase === "lobby");
   assert(lobby.code, "room code was not created");
   assert(lobby.players.length === 1, "lobby should start with one real host player");
   assert(lobby.players[0].role === "HOST", "first player should be the host");
+  assert(lobby.players[0].id === hostPlayerId, "host should keep a stable player id");
   assert(lobby.prompt.length > 0, "room prompt should be populated");
 
-  guest.emit("room:join", { code: lobby.code });
+  guest.emit("room:join", { code: lobby.code, playerId: guestPlayerId });
   const joined = await waitFor(guest, "room:update", (room) => room.code === lobby.code && room.players.length === 2);
   assert(joined.players.length === 2, "guest should be added as a second real player");
+  assert(joined.players[1].id === guestPlayerId, "guest should keep a stable player id");
   assert(joined.players[1].role !== "HOST", "guest should not become host after joining");
+
+  const hostDisconnected = waitFor(guest, "room:update", (room) => (
+    room.code === lobby.code
+    && room.players.some((player) => player.id === hostPlayerId && player.connected === false && player.role === "HOST")
+  ));
+  host.disconnect();
+  await hostDisconnected;
+
+  host = makeClient();
+  await waitFor(host, "connect");
+  const hostRestoredForBoth = waitForBoth("room:update", (room) => (
+    room.code === lobby.code
+    && room.players.some((player) => player.id === hostPlayerId && player.connected === true && player.role === "HOST")
+  ));
+  host.emit("room:resume", { code: lobby.code, playerId: hostPlayerId });
+  const [restoredHostRoom] = await hostRestoredForBoth;
+  assert(restoredHostRoom.hostId === undefined, "host id should not be exposed to clients");
 
   const guestStartBlocked = waitFor(guest, "room:error", (message) => message === "only the host can start this room");
   guest.emit("game:start", { code: lobby.code });

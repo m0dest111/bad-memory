@@ -77,6 +77,7 @@ const promptActions = [
 const roomWords = ["GARBAGE", "TAXFISH", "WIZARD", "MAYHEM", "CRYPTID", "PRINTER", "BOUNCE", "DMVBUG", "VAMPIRE", "CAGE"];
 const MAX_CHAIN_STEPS = 8;
 const TURN_DURATION_MS = 60_000;
+const ROOM_IDLE_TTL_MS = 30 * 60_000;
 
 const avatarPool = [
   { avatar: "wizard", color: "#4ea1ff" },
@@ -244,13 +245,21 @@ function estimateMemoryLoss(original, final) {
   return Math.max(7, Math.min(99, Math.round((1 - retained) * 100)));
 }
 
-function makePlayer(socketId, index, role) {
+function normalizePlayerId(playerId, socketId) {
+  const normalized = String(playerId ?? "").trim();
+  return normalized || socketId;
+}
+
+function makePlayer(playerId, socketId, index, role) {
   const avatar = avatarPool[index % avatarPool.length];
   return {
-    id: socketId,
+    id: playerId,
+    socketId,
     name: `STRANGER ${String(index + 1).padStart(2, "0")}`,
     role,
+    connected: true,
     ready: true,
+    lastSeenAt: new Date().toISOString(),
     ...avatar,
   };
 }
@@ -271,7 +280,7 @@ function publicRoom(room) {
     createdAt: room.createdAt,
     phaseStartedAt: room.phaseStartedAt,
     phaseEndsAt: room.phaseEndsAt,
-    players: room.players,
+    players: room.players.map(({ socketId, ...player }) => player),
     submissions: room.submissions,
   };
 }
@@ -286,6 +295,32 @@ function latestSubmission(room, type) {
 
 function latestGuessText(room) {
   return latestSubmission(room, "guess")?.content ?? room.prompt;
+}
+
+function playerForSocket(room, socketId) {
+  return room.players.find((player) => player.socketId === socketId);
+}
+
+function playerForId(room, playerId) {
+  return room.players.find((player) => player.id === playerId);
+}
+
+function attachPlayerSocket(player, socketId) {
+  player.socketId = socketId;
+  player.connected = true;
+  player.lastSeenAt = new Date().toISOString();
+}
+
+function scheduleRoomCleanup(code) {
+  setTimeout(() => {
+    const room = rooms.get(code);
+    if (!room) return;
+    const hasConnectedPlayers = room.players.some((player) => player.connected);
+    const lastSeen = Math.max(...room.players.map((player) => Date.parse(player.lastSeenAt) || 0));
+    if (!hasConnectedPlayers && Date.now() - lastSeen >= ROOM_IDLE_TTL_MS) {
+      rooms.delete(code);
+    }
+  }, ROOM_IDLE_TTL_MS);
 }
 
 function publicMemory(memory) {
@@ -378,7 +413,8 @@ if (existsSync(distPath)) {
 }
 
 io.on("connection", (socket) => {
-  socket.on("room:create", async () => {
+  socket.on("room:create", async ({ playerId } = {}) => {
+    const stablePlayerId = normalizePlayerId(playerId, socket.id);
     const code = makeRoomCode();
     const prompt = await randomPrompt();
     const room = {
@@ -390,8 +426,8 @@ io.on("connection", (socket) => {
       createdAt: new Date().toISOString(),
       phaseStartedAt: new Date().toISOString(),
       phaseEndsAt: null,
-      hostId: socket.id,
-      players: [makePlayer(socket.id, 0, "HOST")],
+      hostId: stablePlayerId,
+      players: [makePlayer(stablePlayerId, socket.id, 0, "HOST")],
       submissions: [],
     };
 
@@ -401,8 +437,9 @@ io.on("connection", (socket) => {
     emitRoom(io, room);
   });
 
-  socket.on("room:join", ({ code }) => {
+  socket.on("room:join", ({ code, playerId }) => {
     const normalized = String(code ?? "").trim().toUpperCase();
+    const stablePlayerId = normalizePlayerId(playerId, socket.id);
     const room = rooms.get(normalized);
 
     if (!room) {
@@ -415,23 +452,48 @@ io.on("connection", (socket) => {
       return;
     }
 
-    if (room.players.length >= 12 && !room.players.some((player) => player.id === socket.id)) {
+    if (room.players.length >= 12 && !room.players.some((player) => player.id === stablePlayerId)) {
       socket.emit("room:error", `room ${normalized} is full`);
       return;
     }
 
     socket.join(room.code);
-    if (!room.players.some((player) => player.id === socket.id)) {
+    const existingPlayer = playerForId(room, stablePlayerId);
+    if (existingPlayer) {
+      attachPlayerSocket(existingPlayer, socket.id);
+    } else {
       const nextIndex = room.players.length;
-      room.players.push(makePlayer(socket.id, nextIndex, undefined));
+      room.players.push(makePlayer(stablePlayerId, socket.id, nextIndex, undefined));
     }
+    emitRoom(io, room);
+  });
+
+  socket.on("room:resume", ({ code, playerId }) => {
+    const normalized = String(code ?? "").trim().toUpperCase();
+    const stablePlayerId = normalizePlayerId(playerId, socket.id);
+    const room = rooms.get(normalized);
+
+    if (!room) {
+      socket.emit("room:error", `room ${normalized || "(blank)"} could not be restored`);
+      return;
+    }
+
+    const player = playerForId(room, stablePlayerId);
+    if (!player) {
+      socket.emit("room:error", `room ${normalized} does not have your saved seat`);
+      return;
+    }
+
+    attachPlayerSocket(player, socket.id);
+    socket.join(room.code);
     emitRoom(io, room);
   });
 
   socket.on("game:start", ({ code }) => {
     const room = rooms.get(String(code ?? "").toUpperCase());
     if (!room) return;
-    if (room.hostId !== socket.id) {
+    const player = playerForSocket(room, socket.id);
+    if (!player || room.hostId !== player.id) {
       socket.emit("room:error", "only the host can start this room");
       return;
     }
@@ -443,12 +505,13 @@ io.on("connection", (socket) => {
 
   socket.on("submission:drawing", async ({ code, imageUrl }) => {
     const room = rooms.get(String(code ?? "").toUpperCase());
-    if (!room || room.phase !== "draw" || typeof imageUrl !== "string") return;
+    const player = room ? playerForSocket(room, socket.id) : null;
+    if (!room || !player || room.phase !== "draw" || typeof imageUrl !== "string") return;
     room.submissions.push({
       id: `${Date.now()}-drawing`,
       type: "drawing",
       content: imageUrl,
-      playerId: socket.id,
+      playerId: player.id,
       createdAt: new Date().toISOString(),
     });
     if (room.submissions.length >= MAX_CHAIN_STEPS - 1) {
@@ -463,13 +526,14 @@ io.on("connection", (socket) => {
 
   socket.on("submission:guess", async ({ code, guess }) => {
     const room = rooms.get(String(code ?? "").toUpperCase());
+    const player = room ? playerForSocket(room, socket.id) : null;
     const text = String(guess ?? "").trim().slice(0, 120);
-    if (!room || room.phase !== "guess" || !text) return;
+    if (!room || !player || room.phase !== "guess" || !text) return;
     room.submissions.push({
       id: `${Date.now()}-guess`,
       type: "guess",
       content: text,
-      playerId: socket.id,
+      playerId: player.id,
       createdAt: new Date().toISOString(),
     });
     if (room.submissions.length >= MAX_CHAIN_STEPS - 1) {
@@ -484,20 +548,12 @@ io.on("connection", (socket) => {
 
   socket.on("disconnect", () => {
     for (const [code, room] of rooms) {
-      const nextPlayers = room.players.filter((player) => player.id !== socket.id);
-      if (nextPlayers.length === room.players.length) continue;
-
-      if (nextPlayers.length === 0) {
-        rooms.delete(code);
-        continue;
-      }
-
-      if (room.hostId === socket.id) {
-        nextPlayers[0] = { ...nextPlayers[0], role: "HOST" };
-        room.hostId = nextPlayers[0].id;
-      }
-
-      room.players = nextPlayers;
+      const player = playerForSocket(room, socket.id);
+      if (!player) continue;
+      player.connected = false;
+      player.socketId = null;
+      player.lastSeenAt = new Date().toISOString();
+      scheduleRoomCleanup(code);
       emitRoom(io, room);
     }
   });

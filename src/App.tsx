@@ -10,6 +10,7 @@ type Player = {
   role?: string;
   avatar: string;
   color: string;
+  connected?: boolean;
   ready?: boolean;
   empty?: boolean;
 };
@@ -68,6 +69,23 @@ function formatTimer(milliseconds: number | null) {
 function shareLink(slug?: string) {
   if (!slug) return "";
   return `${window.location.origin}/m/${slug}`;
+}
+
+const PLAYER_ID_KEY = "bad-memory-player-id";
+const ROOM_CODE_KEY = "bad-memory-room-code";
+
+function makeClientId() {
+  if (window.crypto?.randomUUID) return window.crypto.randomUUID();
+  return `player-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+function storedPlayerId() {
+  const existing = window.localStorage.getItem(PLAYER_ID_KEY);
+  if (existing) return existing;
+
+  const next = makeClientId();
+  window.localStorage.setItem(PLAYER_ID_KEY, next);
+  return next;
 }
 
 function PixelAvatar({ avatar, color }: { avatar: string; color: string }) {
@@ -292,10 +310,11 @@ function DrawingCanvas({
 
 function App() {
   const [socket, setSocket] = useState<Socket | null>(null);
+  const [playerId] = useState(storedPlayerId);
   const [serverOnline, setServerOnline] = useState(false);
   const [room, setRoom] = useState<RoomState | null>(null);
   const [guess, setGuess] = useState("");
-  const [notice, setNotice] = useState("connecting to the room server...");
+  const [notice, setNotice] = useState("connecting...");
   const [copied, setCopied] = useState<"room" | "link" | null>(null);
   const [roomCodeInput, setRoomCodeInput] = useState("");
   const [now, setNow] = useState(Date.now());
@@ -322,22 +341,29 @@ function App() {
 
     nextSocket.on("connect", () => {
       setServerOnline(true);
-      setNotice("room server online. create or join a room.");
+      const savedRoomCode = window.localStorage.getItem(ROOM_CODE_KEY);
+      if (savedRoomCode) {
+        setNotice(`restoring room ${savedRoomCode}...`);
+        nextSocket.emit("room:resume", { code: savedRoomCode, playerId });
+      } else {
+        setNotice("create or join a room.");
+      }
     });
 
     nextSocket.on("disconnect", () => {
       setServerOnline(false);
-      setNotice(import.meta.env.DEV ? "room server disconnected. run npm run dev:server." : "live room server disconnected. refresh or check service logs.");
+      setNotice("connection lost. trying to reconnect...");
     });
 
     nextSocket.on("connect_error", () => {
       setServerOnline(false);
-      setNotice(import.meta.env.DEV ? "waiting for room server. run npm run dev:server." : "waiting for live room server. check the deploy.");
+      setNotice("connecting...");
     });
 
     nextSocket.on("room:update", (nextRoom: RoomState) => {
       setRoom(nextRoom);
       setRoomCodeInput(nextRoom.code);
+      window.localStorage.setItem(ROOM_CODE_KEY, nextRoom.code);
       if (nextRoom.phase === "lobby") setNotice(`room ${nextRoom.code} created. host can start.`);
       if (nextRoom.phase === "draw") {
         setGuess("");
@@ -351,6 +377,9 @@ function App() {
     });
 
     nextSocket.on("room:error", (message: string) => {
+      if (message.includes("could not be restored") || message.includes("does not have your saved seat")) {
+        window.localStorage.removeItem(ROOM_CODE_KEY);
+      }
       setNotice(message);
     });
 
@@ -359,7 +388,7 @@ function App() {
     return () => {
       nextSocket.disconnect();
     };
-  }, []);
+  }, [playerId]);
 
   useEffect(() => {
     refreshArchive();
@@ -390,7 +419,7 @@ function App() {
   const phase = sharedMemory ? "reveal" : room?.phase ?? "idle";
   const roomCreated = Boolean(room);
   const gameStarted = !sharedMemory && (phase === "draw" || phase === "guess" || phase === "reveal");
-  const isHost = Boolean(room?.players.some((player) => player.id === socket?.id && player.role === "HOST"));
+  const isHost = Boolean(room?.players.some((player) => player.id === playerId && player.role === "HOST"));
   const prompt = sharedMemory?.prompt ?? room?.prompt ?? "create a room to receive a prompt";
   const submissions = sharedMemory?.submissions ?? room?.submissions ?? [];
   const drawingSubmission = latestSubmission(submissions, "drawing");
@@ -440,16 +469,16 @@ function App() {
 
   function createRoom() {
     if (!socket || !serverOnline) {
-      setNotice("room server is not connected yet.");
+      setNotice("connecting...");
       return;
     }
     setGuess("");
-    socket.emit("room:create");
+    socket.emit("room:create", { playerId });
   }
 
   function joinRoom() {
     if (!socket || !serverOnline) {
-      setNotice("room server is not connected yet.");
+      setNotice("connecting...");
       return;
     }
     const code = roomCodeInput.trim().toUpperCase();
@@ -457,7 +486,7 @@ function App() {
       setNotice("enter a room code to join.");
       return;
     }
-    socket.emit("room:join", { code });
+    socket.emit("room:join", { code, playerId });
   }
 
   function startGame() {
@@ -537,7 +566,7 @@ function App() {
               <div className={player.empty ? "player player--empty" : "player"} key={`${player.name}-${index}`}>
                 <PixelAvatar avatar={player.avatar} color={player.color} />
                 <span>{player.name}</span>
-                <b>{player.empty ? "EMPTY" : roomCreated ? (player.role ? `(${player.role})` : "CONNECTED") : "EMPTY"}</b>
+                <b>{player.empty ? "EMPTY" : player.connected === false ? "DISCONNECTED" : roomCreated ? (player.role ? `(${player.role})` : "CONNECTED") : "EMPTY"}</b>
               </div>
             ))}
           </div>
@@ -620,7 +649,7 @@ function App() {
           <section className="panel stats">
             <h2>STATS</h2>
             <dl>
-              <dt>mode</dt><dd>live test</dd>
+              <dt>mode</dt><dd>public room</dd>
               <dt>players</dt><dd>{room?.players.length ?? 0}</dd>
               <dt>drawings</dt><dd>{drawingCount}</dd>
               <dt>guesses</dt><dd>{guessCount}</dd>
@@ -631,9 +660,9 @@ function App() {
 
           <section className="panel gallery">
             <header>
-              <h2>ARCHIVE <small>(SOON)</small></h2>
+              <h2>SAVED MEMORIES</h2>
               <nav>
-                <button className="hot" disabled>NEWEST SAVED</button>
+                <button className="hot" disabled>NEWEST</button>
               </nav>
             </header>
             {archiveMemories.length > 0 ? (
@@ -668,9 +697,9 @@ function App() {
 
         <footer className="site-footer">
           <span>© 2026 BAD MEMORY</span>
-          <span>LIVE TEST BUILD</span>
-          <span>NO ACCOUNTS</span>
-          <span>SAVED CHAINS ENABLED</span>
+          <span>PUBLIC ROOMS</span>
+          <span>NO SIGN-IN</span>
+          <span>SAVED CHAINS</span>
           <strong>☻</strong>
         </footer>
       </section>
@@ -686,8 +715,8 @@ function App() {
               <li>The next player guesses what the drawing is.</li>
               <li>The game keeps alternating draw and guess until the reveal.</li>
             </ol>
-            <p>Play in two browser windows or send the room code to someone else. For the cleanest test, join everyone before pressing Start Game.</p>
-            <button className="hot" onClick={() => setShowHelp(false)}>START TESTING</button>
+            <p>Play with friends by sharing the room code. For the cleanest round, have everyone join before the host presses Start Game.</p>
+            <button className="hot" onClick={() => setShowHelp(false)}>ENTER</button>
           </div>
         </div>
       )}
