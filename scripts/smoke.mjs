@@ -26,6 +26,13 @@ function assert(condition, message) {
   }
 }
 
+async function waitForBoth(event, predicate) {
+  return Promise.all([
+    waitFor(host, event, predicate),
+    waitFor(guest, event, predicate),
+  ]);
+}
+
 const host = io(SERVER_URL, {
   transports: ["websocket", "polling"],
   timeout: 3000,
@@ -52,11 +59,19 @@ try {
   guest.emit("room:join", { code: lobby.code });
   const joined = await waitFor(guest, "room:update", (room) => room.code === lobby.code && room.players.length === 2);
   assert(joined.players.length === 2, "guest should be added as a second real player");
+  assert(joined.players[1].role !== "HOST", "guest should not become host after joining");
 
+  const guestStartBlocked = waitFor(guest, "room:error", (message) => message === "only the host can start this room");
+  guest.emit("game:start", { code: lobby.code });
+  await guestStartBlocked;
+
+  const startedForBoth = waitForBoth("room:update", (room) => room.code === lobby.code && room.phase === "draw");
   host.emit("game:start", { code: lobby.code });
-  const drawingRound = await waitFor(host, "room:update", (room) => room.phase === "draw");
+  const [drawingRound, guestDrawingRound] = await startedForBoth;
   assert(drawingRound.submissions.length === 0, "new draw round should start with no submissions");
   assert(drawingRound.phaseEndsAt, "draw round should expose a countdown end time");
+  assert(guestDrawingRound.phase === drawingRound.phase, "guest should see the draw phase start");
+  assert(guestDrawingRound.phaseEndsAt === drawingRound.phaseEndsAt, "host and guest should share the same draw countdown");
 
   let latestRoom = drawingRound;
   const chainInputs = [
@@ -70,6 +85,12 @@ try {
   ];
 
   for (const [index, input] of chainInputs.entries()) {
+    const expectedPhase = index === chainInputs.length - 1 ? "reveal" : input.type === "drawing" ? "guess" : "draw";
+    const nextUpdateForBoth = waitForBoth(
+      "room:update",
+      (room) => room.code === lobby.code && room.submissions.length === index + 1 && room.phase === expectedPhase,
+    );
+
     if (input.type === "drawing") {
       host.emit("submission:drawing", {
         code: lobby.code,
@@ -82,11 +103,14 @@ try {
       });
     }
 
-    const expectedPhase = index === chainInputs.length - 1 ? "reveal" : input.type === "drawing" ? "guess" : "draw";
-    latestRoom = await waitFor(host, "room:update", (room) => room.submissions.length === index + 1 && room.phase === expectedPhase);
+    const [hostRoom, guestRoom] = await nextUpdateForBoth;
+    latestRoom = hostRoom;
     assert(latestRoom.submissions.length === index + 1, `step ${index + 2} should be stored`);
+    assert(guestRoom.submissions.length === latestRoom.submissions.length, `guest should receive step ${index + 2}`);
+    assert(guestRoom.phase === latestRoom.phase, `guest should see phase ${expectedPhase}`);
     if (expectedPhase === "draw" || expectedPhase === "guess") {
       assert(latestRoom.phaseEndsAt, `${expectedPhase} round should expose a countdown end time`);
+      assert(guestRoom.phaseEndsAt === latestRoom.phaseEndsAt, `${expectedPhase} countdown should sync to guest`);
     }
   }
 
@@ -118,6 +142,7 @@ try {
     prompt: reveal.prompt,
     nextPrompt: secondLobby.prompt,
     memoryLoss: reveal.memoryLoss,
+    players: joined.players.length,
     submissions: reveal.submissions.length,
     savedSlug: saved.memory.slug,
   }));

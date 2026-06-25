@@ -5,6 +5,7 @@
     "build": "tsc && vite build",
     "preview": "vite preview --host 127.0.0.1",
     "start": "node server/index.mjs",
+    "test:multiplayer": "node scripts/smoke.mjs",
     "test:smoke": "node scripts/smoke.mjs"
   },
   "dependencies": {
