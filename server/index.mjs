@@ -331,10 +331,23 @@ function playerForId(room, playerId) {
   return room.players.find((player) => player.id === playerId);
 }
 
+function disconnectedHost(room) {
+  return room.players.find((player) => player.id === room.hostId && player.role === "HOST" && !player.connected);
+}
+
 function attachPlayerSocket(player, socketId) {
   player.socketId = socketId;
   player.connected = true;
   player.lastSeenAt = new Date().toISOString();
+}
+
+function reclaimDisconnectedHost(room, playerId, socketId) {
+  const host = disconnectedHost(room);
+  if (!host) return null;
+  host.id = playerId;
+  room.hostId = playerId;
+  attachPlayerSocket(host, socketId);
+  return host;
 }
 
 function scheduleRoomCleanup(code) {
@@ -527,21 +540,21 @@ io.on("connection", (socket) => {
       return;
     }
 
-    if (room.phase !== "lobby") {
-      socket.emit("room:error", `room ${normalized} is already in progress`);
-      return;
-    }
-
-    if (room.players.length >= 12 && !room.players.some((player) => player.id === stablePlayerId)) {
-      socket.emit("room:error", `room ${normalized} is full`);
-      return;
-    }
-
     socket.join(room.code);
     const existingPlayer = playerForId(room, stablePlayerId);
     if (existingPlayer) {
       attachPlayerSocket(existingPlayer, socket.id);
+    } else if (reclaimDisconnectedHost(room, stablePlayerId, socket.id)) {
+      // Host recovered after the browser lost its saved local player id.
     } else {
+      if (room.phase !== "lobby") {
+        socket.emit("room:error", `room ${normalized} is already in progress`);
+        return;
+      }
+      if (room.players.length >= 12) {
+        socket.emit("room:error", `room ${normalized} is full`);
+        return;
+      }
       const nextIndex = room.players.length;
       room.players.push(makePlayer(stablePlayerId, socket.id, nextIndex, undefined));
     }
@@ -559,12 +572,13 @@ io.on("connection", (socket) => {
     }
 
     const player = playerForId(room, stablePlayerId);
-    if (!player) {
+    const recoveredHost = player ? null : reclaimDisconnectedHost(room, stablePlayerId, socket.id);
+    if (!player && !recoveredHost) {
       socket.emit("room:error", `room ${normalized} does not have your saved seat`);
       return;
     }
 
-    attachPlayerSocket(player, socket.id);
+    if (player) attachPlayerSocket(player, socket.id);
     socket.join(room.code);
     emitRoom(io, room);
   });

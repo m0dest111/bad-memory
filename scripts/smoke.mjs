@@ -49,6 +49,7 @@ async function waitForPlayers(event, predicate) {
 }
 
 const hostPlayerId = "smoke-host";
+const recoveredHostPlayerId = "smoke-host-recovered";
 const guestPlayerId = "smoke-guest";
 const thirdPlayerId = "smoke-third";
 let host = makeClient();
@@ -92,9 +93,9 @@ try {
   await waitFor(host, "connect");
   const hostRestoredForAll = waitForPlayers("room:update", (room) => (
     room.code === lobby.code
-    && room.players.some((player) => player.id === hostPlayerId && player.connected === true && player.role === "HOST")
+    && room.players.some((player) => player.id === recoveredHostPlayerId && player.connected === true && player.role === "HOST")
   ));
-  host.emit("room:resume", { code: lobby.code, playerId: hostPlayerId });
+  host.emit("room:resume", { code: lobby.code, playerId: recoveredHostPlayerId });
   const [restoredHostRoom] = await hostRestoredForAll;
   assert(restoredHostRoom.hostId === undefined, "host id should not be exposed to clients");
 
@@ -107,7 +108,7 @@ try {
   const [drawingRound, guestDrawingRound, thirdDrawingRound] = await startedForAll;
   assert(drawingRound.submissions.length === 0, "new draw round should start with no submissions");
   assert(drawingRound.phaseEndsAt, "draw round should expose a countdown end time");
-  assert(drawingRound.activePlayerId === hostPlayerId, "host should have an active drawing assignment");
+  assert(drawingRound.activePlayerId === recoveredHostPlayerId, "recovered host should have an active drawing assignment");
   assert(guestDrawingRound.phase === drawingRound.phase, "guest should see the draw phase start");
   assert(guestDrawingRound.activePlayerId === guestPlayerId, "guest should have an active drawing assignment");
   assert(guestDrawingRound.phaseEndsAt === drawingRound.phaseEndsAt, "host and guest should share the same draw countdown");
@@ -119,7 +120,7 @@ try {
 
   let latestRoom = drawingRound;
   const players = [
-    { socket: host, id: hostPlayerId, label: "host" },
+    { socket: host, id: recoveredHostPlayerId, label: "host" },
     { socket: guest, id: guestPlayerId, label: "guest" },
     { socket: third, id: thirdPlayerId, label: "third" },
   ];
@@ -156,7 +157,7 @@ try {
     if (expectedPhase === "draw" || expectedPhase === "guess") {
       assert(latestRoom.phaseEndsAt, `${expectedPhase} round should expose a countdown end time`);
       assert(guestRoom.phaseEndsAt === latestRoom.phaseEndsAt, `${expectedPhase} countdown should sync to guest`);
-      assert(latestRoom.activePlayerId === hostPlayerId, `host should get a ${expectedPhase} assignment`);
+      assert(latestRoom.activePlayerId === recoveredHostPlayerId, `host should get a ${expectedPhase} assignment`);
       assert(guestRoom.activePlayerId === guestPlayerId, `guest should get a ${expectedPhase} assignment`);
       assert(thirdRoom.activePlayerId === thirdPlayerId, `third should get a ${expectedPhase} assignment`);
       assert(thirdRoom.phaseEndsAt === latestRoom.phaseEndsAt, `${expectedPhase} countdown should sync to third player`);
